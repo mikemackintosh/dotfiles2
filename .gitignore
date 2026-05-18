@@ -1,0 +1,14 @@
+# macOS junk
+.DS_Store
+._*
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# Runtime state for prompt theme picker (not config)
+.zp-theme
+
+# Local-only sourced files
+*.local.zsh
