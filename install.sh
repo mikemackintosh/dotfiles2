@@ -10,6 +10,7 @@ BACKUP="$HOME/.dotfiles-backup-$(date +%Y%m%d-%H%M%S)"
 PAIRS=(
     ".zshrc                  $HOME/.zshrc"
     ".zprofile               $HOME/.zprofile"
+    ".hushlogin              $HOME/.hushlogin"
     "claude/statusline.sh    $HOME/.claude/statusline.sh"
     "claude/settings.json    $HOME/.claude/settings.json"
 )

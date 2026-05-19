@@ -79,14 +79,12 @@ export PATH="${(j.:.)extra_sources}:$STD_PATH"
 export GOPATH=$HOME/go
 
 dot_plugins=(
-    "add_secret"
     "alias"
     "git"
     "go"
     "grep"
     "keybind"
     "private"
-    "ssh"
 
     "prompt"
 )
