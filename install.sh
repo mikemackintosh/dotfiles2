@@ -11,6 +11,7 @@ PAIRS=(
     ".zshrc                  $HOME/.zshrc"
     ".zprofile               $HOME/.zprofile"
     ".hushlogin              $HOME/.hushlogin"
+    "tmux/tmux.conf          $HOME/.config/tmux/tmux.conf"
     "claude/statusline.sh    $HOME/.claude/statusline.sh"
     "claude/settings.json    $HOME/.claude/settings.json"
 )
