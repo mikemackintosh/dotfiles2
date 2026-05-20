@@ -1,0 +1,17 @@
+tokyonight-vim       4e82e0f
+gruvbox              697c002
+vim-airline          1586662
+vim-airline-themes   77aab8c
+nerdtree             690d061
+nerdtree-git-plugin  e1fe727
+fzf.vim              b9624aa
+vim-go               f4b4ba1
+vim-lsp              474c656
+asyncomplete.vim     17b654a
+asyncomplete-lsp.vim da23f44
+vim-lsp-settings     229485d
+vim-gitgutter        21c977e
+vim-commentary       64a654e
+auto-pairs           39f06b8
+vim-polyglot         f061edd
+vim-devicons         71f239a

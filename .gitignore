@@ -7,8 +7,15 @@
 *.swo
 *~
 
-# Runtime state for prompt theme picker (not config)
+# Runtime state for prompt + vim theme pickers (not config)
 .zp-theme
+.vim-theme
 
 # Local-only sourced files
 *.local.zsh
+
+# vim runtime dirs (created on-demand by ~/.vim/vimrc)
+vim/undo/
+vim/backup/
+vim/swap/
+vim/.netrwhist

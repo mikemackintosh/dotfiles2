@@ -1,0 +1,211 @@
+" ~/.vim/vimrc — LazyVim-style polish in plain vim 8+.
+" Plugins are vendored under pack/vendor/start/ (auto-loaded by vim's native package manager).
+
+" ===== Basics =====
+set nocompatible
+filetype plugin indent on
+syntax on
+set encoding=utf-8
+set termguicolors
+
+" Numbers, cursor, scroll
+set number relativenumber
+set cursorline
+set scrolloff=8
+set sidescrolloff=8
+
+" Indent
+set expandtab
+set tabstop=4
+set softtabstop=4
+set shiftwidth=4
+set smartindent
+set autoindent
+
+" Search
+set incsearch hlsearch
+set ignorecase smartcase
+
+" Splits open to the right / below (matches tmux feel)
+set splitright splitbelow
+
+" UI
+set noshowmode              " airline shows it
+set laststatus=2
+set showcmd
+set signcolumn=yes
+set updatetime=300
+set timeoutlen=500
+set ttimeoutlen=10
+set lazyredraw
+set ttyfast
+
+" Buffers
+set hidden
+
+" Persistent undo + tidy backup/swap dirs
+silent! call mkdir(expand('~/.vim/undo'),   'p')
+silent! call mkdir(expand('~/.vim/backup'), 'p')
+silent! call mkdir(expand('~/.vim/swap'),   'p')
+set undofile
+set undodir=~/.vim/undo//
+set backupdir=~/.vim/backup//
+set directory=~/.vim/swap//
+
+" Mouse
+set mouse=a
+
+" Completion menu behavior
+set completeopt=menuone,noinsert,noselect
+set shortmess+=c
+
+" Leader
+let mapleader = " "
+
+" ===== Theme (Tokyo Night default, Gruvbox toggle) =====
+if filereadable($HOME.'/.vim-theme')
+    let g:vim_theme = readfile($HOME.'/.vim-theme')[0]
+else
+    let g:vim_theme = 'tokyonight'
+endif
+
+if g:vim_theme ==# 'gruvbox'
+    set background=dark
+    silent! colorscheme gruvbox
+    let g:airline_theme = 'gruvbox'
+else
+    let g:tokyonight_style = 'night'
+    let g:tokyonight_enable_italic = 1
+    silent! colorscheme tokyonight
+    let g:airline_theme = 'tokyonight'
+endif
+
+" :VimTheme tokyonight|gruvbox — writes ~/.vim-theme, takes effect on next start
+function! s:set_vim_theme(name) abort
+    if a:name !=# 'tokyonight' && a:name !=# 'gruvbox'
+        echo 'Usage: :VimTheme [tokyonight|gruvbox]'
+        return
+    endif
+    call writefile([a:name], $HOME.'/.vim-theme')
+    echo 'Saved theme: '.a:name.'. Restart vim to apply.'
+endfunction
+function! s:vim_theme_complete(A,L,P) abort
+    return filter(['tokyonight', 'gruvbox'], 'v:val =~# "^".a:A')
+endfunction
+command! -nargs=1 -complete=customlist,<SID>vim_theme_complete VimTheme call <SID>set_vim_theme(<f-args>)
+
+" ===== Airline (statusline) =====
+let g:airline_powerline_fonts = 1
+let g:airline#extensions#tabline#enabled = 1
+let g:airline#extensions#tabline#formatter = 'unique_tail'
+let g:airline#extensions#branch#enabled = 1
+
+" ===== NERDTree =====
+let g:NERDTreeShowHidden = 1
+let g:NERDTreeMinimalUI = 1
+let g:NERDTreeDirArrowExpandable = '▶'
+let g:NERDTreeDirArrowCollapsible = '▼'
+let g:NERDTreeWinSize = 32
+let NERDTreeIgnore = ['\.DS_Store$', '\.git$', '\.swp$']
+nnoremap <silent> <leader>e :NERDTreeToggle<CR>
+nnoremap <silent> <leader>E :NERDTreeFind<CR>
+" Close vim if NERDTree is the only window left
+autocmd BufEnter * if (winnr("$") == 1 && exists("b:NERDTree") && b:NERDTree.isTabTree()) | quit | endif
+
+" ===== fzf =====
+" Source the brew-installed fzf vim plugin (for :FZF etc.)
+if isdirectory('/opt/homebrew/opt/fzf')
+    set rtp+=/opt/homebrew/opt/fzf
+endif
+nnoremap <silent> <leader>ff :Files<CR>
+nnoremap <silent> <leader>fg :Rg<CR>
+nnoremap <silent> <leader>fb :Buffers<CR>
+nnoremap <silent> <leader>fh :History<CR>
+nnoremap <silent> <leader>fl :BLines<CR>
+
+" ===== LSP (vim-lsp + asyncomplete + vim-lsp-settings) =====
+let g:lsp_settings_filetype_go = []   " vim-go handles Go end-to-end
+let g:asyncomplete_auto_popup = 1
+let g:asyncomplete_auto_completeopt = 0
+let g:lsp_diagnostics_signs_enabled = 1
+let g:lsp_diagnostics_virtual_text_enabled = 0
+let g:lsp_document_highlight_enabled = 0
+
+function! s:on_lsp_buffer_enabled() abort
+    setlocal omnifunc=lsp#complete
+    setlocal signcolumn=yes
+    nmap <buffer> gd        <plug>(lsp-definition)
+    nmap <buffer> gr        <plug>(lsp-references)
+    nmap <buffer> gi        <plug>(lsp-implementation)
+    nmap <buffer> gt        <plug>(lsp-type-definition)
+    nmap <buffer> K         <plug>(lsp-hover)
+    nmap <buffer> <leader>rn <plug>(lsp-rename)
+    nmap <buffer> [d        <plug>(lsp-previous-diagnostic)
+    nmap <buffer> ]d        <plug>(lsp-next-diagnostic)
+endfunction
+augroup lsp_install
+    au!
+    autocmd User lsp_buffer_enabled call s:on_lsp_buffer_enabled()
+augroup END
+
+" ===== vim-go =====
+let g:go_def_mode = 'gopls'
+let g:go_info_mode = 'gopls'
+let g:go_fmt_command = 'goimports'
+let g:go_auto_type_info = 1
+let g:go_highlight_functions = 1
+let g:go_highlight_methods = 1
+let g:go_highlight_types = 1
+let g:go_highlight_operators = 1
+let g:go_highlight_extra_types = 1
+let g:go_highlight_build_constraints = 1
+let g:go_highlight_generate_tags = 1
+
+" ===== gitgutter =====
+let g:gitgutter_map_keys = 0
+nmap ]h <Plug>(GitGutterNextHunk)
+nmap [h <Plug>(GitGutterPrevHunk)
+nmap <leader>hp <Plug>(GitGutterPreviewHunk)
+nmap <leader>hs <Plug>(GitGutterStageHunk)
+nmap <leader>hu <Plug>(GitGutterUndoHunk)
+
+" ===== Keymaps =====
+" Save / quit
+nnoremap <leader>w :w<CR>
+nnoremap <leader>q :q<CR>
+nnoremap <leader>Q :qa!<CR>
+nnoremap <leader>x :x<CR>
+
+" Clear search highlight
+nnoremap <silent> <leader>h :nohlsearch<CR>
+
+" Buffer nav
+nnoremap <silent> <leader>bn :bnext<CR>
+nnoremap <silent> <leader>bp :bprev<CR>
+nnoremap <silent> <leader>bd :bdelete<CR>
+
+" Splits (matches tmux's prefix-|, prefix-- ergonomically)
+nnoremap <leader>\| :vsplit<CR>
+nnoremap <leader>- :split<CR>
+
+" Window nav
+nnoremap <C-h> <C-w>h
+nnoremap <C-j> <C-w>j
+nnoremap <C-k> <C-w>k
+nnoremap <C-l> <C-w>l
+
+" Move highlighted lines up/down
+vnoremap J :m '>+1<CR>gv=gv
+vnoremap K :m '<-2<CR>gv=gv
+
+" Keep cursor centered on jumps
+nnoremap n nzzzv
+nnoremap N Nzzzv
+nnoremap <C-d> <C-d>zz
+nnoremap <C-u> <C-u>zz
+
+" Don't yank replaced text in visual paste
+xnoremap p "_dP
+
+" Reload vimrc
+nnoremap <leader>R :source $MYVIMRC<CR>:echo 'vimrc reloaded'<CR>
