@@ -114,3 +114,10 @@
 # overrides anything above. See gitconfig.private.example.
 [include]
   path = ~/.private/gitconfig
+
+# Per-directory identity overlays. Each block applies only when the
+# repo's gitdir lives under the given path (trailing slash matters —
+# it makes the match recursive). Keeps work commits attributed to
+# the work email automatically, without a pre-commit guard.
+[includeIf "gitdir:~/go/src/github.com/wealthsimple/"]
+  path = ~/.private/gitconfig-work
