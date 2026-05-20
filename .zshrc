@@ -70,6 +70,7 @@ export GOPATH=$HOME/go
 STD_PATH=$PATH
 extra_sources=(
     $HOME/bin
+    $HOME/.dotfiles/bin
     "${GOPATH}/bin"
     /opt/homebrew/bin/
 )

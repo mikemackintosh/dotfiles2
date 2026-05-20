@@ -118,7 +118,7 @@ for pair in "${PAIRS[@]}"; do
     link "$src" "$dst"
 done
 
-chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh"
+chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" "$DOTFILES/bin/memories"
 
 if [[ -d "$BACKUP" ]]; then
     echo
