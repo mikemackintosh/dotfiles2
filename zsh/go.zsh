@@ -17,8 +17,7 @@ goto() {
     cd "${TARGETS}"
   else
     echo -e "\nWe found more than one location matching you input.\n"
-    for c in {0..$TARGET_COUNT}; do
-      c=$(($c + 1))
+    for c in {1..$TARGET_COUNT}; do
       echo "  $c: ${TARGETS[$c]}";
     done
     echo -en "\nPlease choose a destination: "

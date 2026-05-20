@@ -1,6 +1,5 @@
 # ls
-command -v eza &>/dev/null
-if [[ $? -eq 0 ]]; then
+if command -v eza &>/dev/null; then
   alias ls=eza
 fi
 

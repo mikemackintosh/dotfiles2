@@ -1,5 +1,4 @@
-# Key bindings
-bindkey -v
+# Key bindings (emacs mode)
 bindkey -e
 bindkey '^R' history-incremental-search-backward
 bindkey "^X\x7f" backward-kill-line
