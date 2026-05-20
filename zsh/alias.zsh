@@ -9,6 +9,7 @@ alias sudo='sudo -E'
 alias gs='git status'
 alias gl='git log --oneline --graph --decorate'
 alias gp='git pull'
+alias gm='git main'      # checkout main + pull (see [alias] main in .gitconfig)
 
 function gb {
   if [[ ! -z "$1" ]]; then
