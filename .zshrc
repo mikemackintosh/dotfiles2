@@ -85,6 +85,7 @@ dot_plugins=(
     "private"
 
     "prompt"
+    "fzf-widgets"
 )
 
 DOT_ZSH_PLUGIN_DIR="${HOME}/.dotfiles/zsh"
