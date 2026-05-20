@@ -1,0 +1,30 @@
+# Template for ~/.private/gitconfig — copy this file there and fill in
+# your own values. The main .gitconfig pulls it in via [include] at
+# the bottom, so anything you put here overrides the public config.
+#
+# Why this lives outside the dotfiles repo: keeps your email, name,
+# and signing key out of any clone of the dotfiles repo.
+#
+#   cp ~/.dotfiles/gitconfig.private.example ~/.private/gitconfig
+#   $EDITOR ~/.private/gitconfig
+
+[user]
+  name = Your Name
+  email = you@example.com
+  # Your SSH public key — must also be registered on GitHub under
+  # "Signing keys" for verified commits.
+  signingkey = ssh-rsa REPLACE_ME
+
+[gpg]
+  format = ssh
+
+# macOS + 1Password example. Adjust or delete if you sign differently
+# (e.g. use a GPG key, ssh-agent directly, or no signing at all).
+[gpg "ssh"]
+  program = "/Applications/1Password.app/Contents/MacOS/op-ssh-sign"
+
+[commit]
+  gpgsign = true
+
+[tag]
+  gpgsign = true
