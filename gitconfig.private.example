@@ -28,3 +28,12 @@
 
 [tag]
   gpgsign = true
+
+# Optional: per-directory identity overlays. If you have a work repo
+# root, put work-only identity in ~/.private/gitconfig-work and the
+# main .gitconfig will auto-apply it via includeIf when you're inside
+# that path. Example: ~/.private/gitconfig-work might contain only:
+#
+#   [user]
+#     email = you@employer.com
+
