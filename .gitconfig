@@ -1,0 +1,115 @@
+# Public dotfiles git config. Personal identity (user.name, user.email,
+# signing key) and signing setup live in ~/.private/gitconfig — see
+# gitconfig.private.example in this repo for the expected shape.
+
+[init]
+  defaultBranch = main
+
+[branch]
+  autosetuprebase = always
+
+[pull]
+  rebase = true
+
+[format]
+  signoff = true
+
+[grep]
+  linenumber = true
+
+[push]
+  default = simple
+
+[color]
+  ui = true
+
+[color "branch"]
+  current = yellow reverse
+  local = yellow
+  remote = green
+
+[color "diff"]
+  commit = green
+  meta = yellow
+  frag = cyan
+  old = red
+  new = green
+  whitespace = red reverse
+
+[color "status"]
+  added = yellow
+  changed = green
+  untracked = cyan
+
+[merge]
+  ff = false
+  tool = vimdiff
+  log = true
+
+[help]
+  autocorrect = 1
+
+[alias]
+  d = diff --patience
+  br = branch
+  ci = commit -a
+  cm = commit -m
+  co = checkout
+  st = status
+
+  up = pull
+  upstream = remote add upstream
+  lg = log --graph --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(reset) %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)'
+  lgo = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --date=relative
+  lga = log --graph --all --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --date=relative
+
+[core]
+  excludesfile = ~/.gitignore
+  whitespace   = space-before-tab,-indent-with-non-tab,trailing-space
+  trustctime   = false
+  pager = delta
+
+[interactive]
+  diffFilter = delta --color-only --features=interactive
+
+[delta]
+  features = decorations
+
+[delta "interactive"]
+  keep-plus-minus-markers = false
+
+[delta "decorations"]
+  commit-decoration-style = blue ol
+  commit-style = raw
+  file-style = omit
+  hunk-header-decoration-style = blue box
+  hunk-header-file-style = red
+  hunk-header-line-number-style = "#067a00"
+  hunk-header-style = file line-number syntax
+
+[url "ssh://git@github.com/"]
+  insteadOf = gh:
+  insteadOf = ghub:
+  insteadOf = github:
+  insteadOf = http://github.com/
+  insteadOf = https://github.com/
+
+[url "https://github.com/homebrew/"]
+  insteadOf = homebrew:
+  insteadOf = brew:
+  insteadOf = ssh://git@github.com:homebrew
+
+# Per-OS overrides — no-op if the target file is absent.
+[IncludeIf "gitdir:/Users"]
+  path = ~/.gitconfig-osx
+
+[IncludeIf "gitdir:/home"]
+  path = ~/.gitconfig-linux
+
+[IncludeIf "gitdir:C:"]
+  path = ~/.gitconfig-windows
+
+# Machine-local identity + signing. Last include wins, so this
+# overrides anything above. See gitconfig.private.example.
+[include]
+  path = ~/.private/gitconfig
