@@ -86,14 +86,29 @@ typeset -g _ZP_GIT=$''    # git branch
 typeset -g _ZP_CLOCK=$''  # fa-clock-o
 typeset -g _ZP_BRAIN=$''  # fa-bookmark
 
+# Cache the memory-file count keyed by "<dir>:<mtime>". A single stat
+# is much cheaper than re-globbing every prompt, and the mtime key
+# catches files added mid-session without needing a chpwd hook.
+zmodload -F zsh/stat b:zstat 2>/dev/null
+typeset -g _ZP_MEM_KEY="" _ZP_MEM_COUNT=0
+
 _zp_memory_count() {
     local slug="${PWD//\//-}"
     local dir="$HOME/.claude/projects/${slug}/memory"
-    [[ -d $dir ]] || { print 0; return }
-    local files=("$dir"/*.md(N))
-    local count=${#files}
-    [[ -f "$dir/MEMORY.md" ]] && (( count-- ))
-    print $count
+    if [[ ! -d $dir ]]; then
+        print 0
+        return
+    fi
+    local -a st
+    zstat -A st +mtime -- "$dir" 2>/dev/null
+    local key="$dir:${st[1]:-0}"
+    if [[ $_ZP_MEM_KEY != $key ]]; then
+        local files=("$dir"/*.md(N))
+        _ZP_MEM_COUNT=${#files}
+        [[ -f "$dir/MEMORY.md" ]] && (( _ZP_MEM_COUNT-- ))
+        _ZP_MEM_KEY=$key
+    fi
+    print $_ZP_MEM_COUNT
 }
 
 _zp_build_prompt() {
