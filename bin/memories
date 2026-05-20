@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# memories — browse Claude Code project memories with an fzf interface.
+# memories — browse, create, and search Claude Code project memories.
 #
-# By default shows memories for the current directory's project (matching
-# what the zsh prompt counts). Pass -a / --all to browse every project.
+#   memories                     # fzf-browse this dir's project memories
+#   memories -a                  # fzf-browse memories across every project
+#   memories new <type> <name>   # scaffold a new memory and open it in $EDITOR
+#                                #   type ∈ {user, feedback, project, reference}
+#                                #   name = kebab-case slug
+#   memories grep <pattern>      # ripgrep (or grep) across every project's memories
 #
-#   memories             # this dir
-#   memories -a          # all projects
-#
-# Inside fzf:
+# Inside the fzf browser:
 #   enter      open the memory in $EDITOR
 #   ctrl-y     copy the memory's path to the clipboard (pbcopy)
 #   ctrl-/     toggle the preview pane
@@ -114,6 +115,70 @@ preview_file() {
     awk '/^---$/{n++; next} n>=2{print}' "$f" | render_md
 }
 
+# ---------- subcommand: new ----------
+cmd_new() {
+    local type="${1:-}" name="${2:-}"
+    case "$type" in
+        user|feedback|project|reference) ;;
+        *)
+            echo "Usage: memories new <type> <name>" >&2
+            echo "  type ∈ {user, feedback, project, reference}" >&2
+            echo "  name = kebab-case slug (letters, digits, hyphens)" >&2
+            exit 2 ;;
+    esac
+    if [[ ! $name =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+        echo "memories new: name must be kebab-case (got: '$name')" >&2
+        exit 2
+    fi
+
+    local slug="${PWD//\//-}"
+    local memdir="$MEMORY_ROOT/$slug/memory"
+    mkdir -p "$memdir"
+
+    local file="$memdir/${type}_${name//-/_}.md"
+    if [[ -e $file ]]; then
+        echo "memories new: already exists: $file" >&2
+        exit 1
+    fi
+
+    cat > "$file" <<EOF
+---
+name: ${type}-${name}
+description: TODO one-line summary
+metadata:
+  type: ${type}
+---
+
+TODO body
+EOF
+
+    # Append to MEMORY.md index, creating it if absent.
+    local index="$memdir/MEMORY.md"
+    local rel="${file#$memdir/}"
+    printf -- '- [TODO title](%s) — TODO one-line hook\n' "$rel" >> "$index"
+
+    echo "Created $file"
+    echo "Indexed in $index (last line — update title + hook)"
+    exec "${EDITOR:-vim}" "$file"
+}
+
+# ---------- subcommand: grep ----------
+cmd_grep() {
+    local pattern="${1:-}"
+    if [[ -z $pattern ]]; then
+        echo "Usage: memories grep <pattern>" >&2
+        exit 2
+    fi
+    shift
+    local grep_cmd=(grep -rn --color=always --include='*.md')
+    if command -v rg >/dev/null 2>&1; then
+        grep_cmd=(rg --color=always --line-number --glob '*.md')
+    fi
+    # Pass through extra flags after the pattern.
+    "${grep_cmd[@]}" "$@" -- "$pattern" "$MEMORY_ROOT"/*/memory 2>/dev/null \
+        | sed "s#$MEMORY_ROOT/##"
+}
+
 # ---------- entry point ----------
 case "${1:-}" in
     __preview)
@@ -123,6 +188,16 @@ case "${1:-}" in
     -h|--help)
         sed -n '2,15p' "$SELF" | sed 's/^# \{0,1\}//'
         exit 0
+        ;;
+    new)
+        shift
+        cmd_new "$@"
+        exit 0
+        ;;
+    grep)
+        shift
+        cmd_grep "$@"
+        exit $?
         ;;
 esac
 
