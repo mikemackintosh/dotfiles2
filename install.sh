@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Symlinks dotfiles into $HOME. Idempotent; backs up any existing
 # real files into ~/.dotfiles-backup-<timestamp>/ before linking.
+#
+# Usage:
+#   install.sh             link everything (default)
+#   install.sh --check     verify symlinks and brew deps; no changes
 set -euo pipefail
 
 DOTFILES="$(cd "$(dirname "$0")" && pwd)"
 BACKUP="$HOME/.dotfiles-backup-$(date +%Y%m%d-%H%M%S)"
+BREWFILE="$DOTFILES/Brewfile"
 
 # Pairs of: <source-in-dotfiles> <dest-in-home>
 PAIRS=(
@@ -47,6 +52,65 @@ link() {
     ln -s "$src" "$dst"
     echo "link $dst -> $src"
 }
+
+# Doctor: read-only audit of the install. Returns non-zero on any failure.
+check() {
+    local failed=0
+
+    echo "Symlinks:"
+    for pair in "${PAIRS[@]}"; do
+        read -r src dst <<<"$pair"
+        local expected="$DOTFILES/$src"
+        if [[ ! -L "$dst" ]]; then
+            if [[ -e "$dst" ]]; then
+                echo "  FAIL  $dst exists but is not a symlink"
+            else
+                echo "  FAIL  $dst missing"
+            fi
+            failed=1
+        elif [[ "$(readlink "$dst")" != "$expected" ]]; then
+            echo "  FAIL  $dst -> $(readlink "$dst") (expected $expected)"
+            failed=1
+        else
+            echo "  ok    $dst"
+        fi
+    done
+
+    echo
+    echo "Brew dependencies:"
+    if ! command -v brew >/dev/null 2>&1; then
+        echo "  FAIL  brew is not installed"
+        failed=1
+    elif [[ ! -f "$BREWFILE" ]]; then
+        echo "  skip  no Brewfile at $BREWFILE"
+    elif brew bundle check --file="$BREWFILE" >/dev/null 2>&1; then
+        echo "  ok    all packages present"
+    else
+        echo "  FAIL  missing packages — run: brew bundle --file=$BREWFILE"
+        brew bundle check --file="$BREWFILE" --verbose 2>&1 | sed 's/^/        /'
+        failed=1
+    fi
+
+    echo
+    if (( failed )); then
+        echo "doctor: issues found"
+        return 1
+    fi
+    echo "doctor: all good"
+}
+
+case "${1:-}" in
+    --check|-c|doctor)
+        check
+        exit $?
+        ;;
+    "")
+        ;;
+    *)
+        echo "Usage: $0 [--check]" >&2
+        exit 2
+        ;;
+esac
 
 for pair in "${PAIRS[@]}"; do
     read -r src dst <<<"$pair"
