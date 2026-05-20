@@ -18,13 +18,11 @@ setopt mark_dirs
 setopt list_packed
 setopt extended_glob
 setopt nullglob
-setopt SH_WORD_SPLIT
 setopt interactive_comments
 setopt no_beep
 setopt numeric_glob_sort
 setopt notify
 setopt long_list_jobs
-setopt correct
 
 # Changing directories
 setopt auto_cd
@@ -58,8 +56,7 @@ setopt hist_find_no_dups
 # Set the editor, default to VIM
 # Upgrade to VS Code if it's installed
 export EDITOR=vim
-command -v code &>/dev/null
-if [[ $? -eq 0 ]]; then
+if command -v code &>/dev/null; then
   export EDITOR=code
 fi
 
@@ -68,6 +65,8 @@ if [[ -d /opt/homebrew/bin ]]; then
   eval $(/opt/homebrew/bin/brew shellenv)
 fi
 
+export GOPATH=$HOME/go
+
 STD_PATH=$PATH
 extra_sources=(
     $HOME/bin
@@ -75,8 +74,6 @@ extra_sources=(
     /opt/homebrew/bin/
 )
 export PATH="${(j.:.)extra_sources}:$STD_PATH"
-
-export GOPATH=$HOME/go
 
 dot_plugins=(
     "alias"
@@ -106,8 +103,13 @@ reload() {
 }
 
 # Auto-load completion and tab menu
+# Skip the slow security check unless the dump is older than 24h.
 autoload -Uz compinit
-compinit
+if [[ -n ~/.zcompdump(#qN.mh+24) ]]; then
+    compinit
+else
+    compinit -C
+fi
 zstyle ':completion:*' menu select
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
@@ -116,10 +118,6 @@ zstyle ':completion:*' cache-path ~/.zsh/cache
 
 # Move cursor to bottom of screen
 printf '\n%.0s' {1..$LINES}
-# Set cursor to I-beam
-# printf '\033[5 q\r'
-
-alias clear="clear && printf '\n%.0s' {1..$LINES} && printf '\033[5 q\r'"
 
 # External tool integrations
 # fzf: fuzzy ctrl-R history, ctrl-T file picker, alt-C dir jump
