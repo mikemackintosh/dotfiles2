@@ -14,6 +14,9 @@
 # Local-only sourced files
 *.local.zsh
 
+# Per-machine project list for bin/tmux-sessionizer
+.tmux-sessionizer-paths
+
 # vim runtime dirs (created on-demand by ~/.vim/vimrc)
 vim/undo/
 vim/backup/

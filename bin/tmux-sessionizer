@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# tmux-sessionizer — fzf-pick a project directory and attach a tmux
+# session named after it (create if missing). Works in or out of tmux.
+#
+# Usage:
+#   tmux-sessionizer            # fzf over the project list
+#   tmux-sessionizer <dir>      # skip the picker, use <dir> directly
+#
+# Project list comes from ~/.dotfiles/.tmux-sessionizer-paths if
+# present, otherwise the defaults at the bottom of collect_projects.
+# Each line is an exact dir OR a shell glob:
+#
+#   ~/go/src/github.com/wealthsimple/*
+#   ~/.dotfiles
+#   ~/personal/blog
+#
+# Inside tmux: bound to `prefix + f` (see tmux.conf).
+
+set -euo pipefail
+shopt -s nullglob
+
+PATHS_FILE="$HOME/.dotfiles/.tmux-sessionizer-paths"
+
+collect_projects() {
+    local line x
+    if [[ -r $PATHS_FILE ]]; then
+        while IFS= read -r line || [[ -n $line ]]; do
+            [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+            for x in $(eval echo "$line"); do
+                [[ -d $x ]] && echo "$x"
+            done
+        done < "$PATHS_FILE"
+    else
+        for x in "$HOME/go/src/github.com/wealthsimple"/*/; do
+            [[ -d $x ]] && echo "${x%/}"
+        done
+        [[ -d "$HOME/.dotfiles" ]] && echo "$HOME/.dotfiles"
+    fi
+}
+
+if [[ $# -eq 1 ]]; then
+    selected=$1
+else
+    selected=$(collect_projects \
+        | fzf --prompt="project> " --header="open or attach a tmux session")
+fi
+[[ -z $selected ]] && exit 0
+
+# tmux session names can't contain '.' or ':'.
+session=$(basename "$selected" | tr '.:' '__')
+tmux_running=$(pgrep tmux || true)
+
+if [[ -z "${TMUX:-}" && -z "$tmux_running" ]]; then
+    exec tmux new-session -s "$session" -c "$selected"
+fi
+
+if ! tmux has-session -t="$session" 2>/dev/null; then
+    tmux new-session -ds "$session" -c "$selected"
+fi
+
+if [[ -z "${TMUX:-}" ]]; then
+    exec tmux attach -t "$session"
+else
+    exec tmux switch-client -t "$session"
+fi
