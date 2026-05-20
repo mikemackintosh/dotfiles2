@@ -118,7 +118,8 @@ for pair in "${PAIRS[@]}"; do
     link "$src" "$dst"
 done
 
-chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" "$DOTFILES/bin/memories"
+chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
+         "$DOTFILES/bin/memories" "$DOTFILES/bin/tmux-sessionizer"
 
 if [[ -d "$BACKUP" ]]; then
     echo
