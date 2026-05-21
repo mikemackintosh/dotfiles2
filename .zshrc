@@ -137,14 +137,25 @@ eval "$(direnv hook zsh)"
 # zsh-autosuggestions: fish-style greyed suggestion from history
 source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 
-# Tab: always do menu completion (cycles through real local matches on
-# repeated press, thanks to menu_complete + auto_menu opts above).
-# The zsh-autosuggestions guess (greyed text after cursor) stays visible
-# but Tab never auto-accepts it — use these keys to accept explicitly:
-#   Right-arrow    accept the whole suggestion
-#   Ctrl-E         accept the whole suggestion (end-of-line)
-#   Ctrl-F         accept one word of the suggestion (forward-word)
-bindkey '^I' expand-or-complete
+# Tab: context-sensitive.
+#   - After whitespace ("ssh <Tab>", "git <Tab>"): if zsh-autosuggestions
+#     has a guess from history, accept it. Real completion at the start
+#     of an argument is usually a 100+-entry user/path dump.
+#   - Mid-word ("ainstein-<Tab>", "src/m<Tab>"): always do real menu
+#     completion — the user is refining a specific string and wants
+#     local matches, not a stale history guess.
+# Explicit autosuggestion-accept keys still work regardless:
+#   Right-arrow / Ctrl-E   accept the whole guess
+#   Ctrl-F                 accept one word
+_tab_smart() {
+    if [[ -n "$POSTDISPLAY" && "$LBUFFER" =~ [[:space:]]$ ]]; then
+        zle autosuggest-accept
+    else
+        zle expand-or-complete
+    fi
+}
+zle -N _tab_smart
+bindkey '^I' _tab_smart
 
 # zsh-syntax-highlighting: MUST be sourced last (hooks into ZLE)
 source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
