@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# notify <cmd...> — run a command, then fire a macOS notification with
+# its outcome (success/failure + exit code) and elapsed time. The
+# command's exit status is propagated.
+#
+#   notify go test ./...
+#   notify make build && notify make deploy
+#
+# Notifications use Apple Script's `display notification`. The
+# notification's body is the command line; the title encodes success
+# and duration. macOS will only show notifications if Terminal/iTerm
+# is allowed in System Settings > Notifications.
+
+set -uo pipefail
+
+if [[ $# -eq 0 ]]; then
+    echo "usage: notify <cmd...>" >&2
+    exit 2
+fi
+
+cmd_str="$*"
+start=$(date +%s)
+"$@"
+status=$?
+end=$(date +%s)
+elapsed=$((end - start))
+
+if (( elapsed >= 60 )); then
+    dur=$(printf '%dm%02ds' $((elapsed / 60)) $((elapsed % 60)))
+else
+    dur="${elapsed}s"
+fi
+
+if (( status == 0 )); then
+    title="✓ done in $dur"
+else
+    title="✗ failed (exit $status) in $dur"
+fi
+
+# Escape backslashes and double-quotes for AppleScript string literal.
+escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+osascript -e "display notification \"$(escape "$cmd_str")\" with title \"$(escape "$title")\"" 2>/dev/null || true
+
+exit $status
