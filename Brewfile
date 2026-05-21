@@ -10,7 +10,6 @@ brew "eza"                       # modern ls; aliased in zsh/alias.zsh
 brew "jq"                        # parses Claude statusline JSON in claude/statusline.sh
 brew "tmux"                      # tmux/tmux.conf
 brew "gitleaks"                  # scanned by githooks/pre-push
-brew "terminal-notifier"         # used by bin/notify for visible alerts
 
 # zsh enhancements — .zshrc sources these from /opt/homebrew/share
 brew "zsh-autosuggestions"

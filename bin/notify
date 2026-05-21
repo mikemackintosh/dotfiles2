@@ -1,25 +1,29 @@
 #!/usr/bin/env bash
-# notify <cmd...> — run a command, then fire a macOS notification with
-# its outcome (success/failure + exit code) and elapsed time. Always
-# rings the terminal bell as a fallback audible cue. The command's
-# exit status is propagated.
+# notify [-q|--quiet] <cmd...> — run a command, signal completion.
+# Designed to be reliable on macOS Tahoe where the system silently
+# files Notification Center entries without showing banners.
 #
+# Channels (none of which require macOS notification permission):
+#   1. iTerm2 OSC 9 escape sequence — produces an in-iTerm banner.
+#   2. `say` TTS — speaks "done" / "failed". Suppress with -q.
+#   3. Terminal bell (\a) — always rings.
+#
+# Examples:
 #   notify go test ./...
-#   notify make build
+#   notify -q make build
 #
-# Backends, in preference order:
-#   1. terminal-notifier (brew install terminal-notifier) — recommended;
-#      it appears as its own entry in System Settings > Notifications
-#      so permissions are easy to grant and actually stick.
-#   2. osascript `display notification` — exits 0 even when the system
-#      drops the notification silently, so reliability varies by macOS
-#      permission state. Used as a fallback.
-#   3. Terminal bell (\a) — always runs, in case both above are muted.
+# The command's own exit status is propagated.
 
 set -uo pipefail
 
+speak=1
+if [[ ${1:-} == "-q" || ${1:-} == "--quiet" ]]; then
+    speak=0
+    shift
+fi
+
 if [[ $# -eq 0 ]]; then
-    echo "usage: notify <cmd...>" >&2
+    echo "usage: notify [-q|--quiet] <cmd...>" >&2
     exit 2
 fi
 
@@ -37,31 +41,25 @@ else
 fi
 
 if (( status == 0 )); then
-    title="✓ done in $dur"
-    sound="Glass"
+    short="done in $dur"
+    speech="done"
 else
-    title="✗ failed (exit $status) in $dur"
-    sound="Basso"
+    short="failed (exit $status) in $dur"
+    speech="failed"
 fi
 
-if command -v terminal-notifier >/dev/null 2>&1; then
-    terminal-notifier \
-        -title   "$title" \
-        -message "$cmd_str" \
-        -sound   "$sound" \
-        >/dev/null 2>&1 || true
-else
-    # Fallback to osascript. Escape backslashes and double-quotes for
-    # the AppleScript string literal.
-    escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
-    osascript \
-        -e "display notification \"$(escape "$cmd_str")\" with title \"$(escape "$title")\" sound name \"$sound\"" \
-        2>/dev/null || true
+# 1. iTerm2 OSC 9 banner. Rendered by iTerm itself; bypasses macOS
+#    notification permissions entirely.
+if [[ ${TERM_PROGRAM:-} == "iTerm.app" ]]; then
+    ( printf '\033]9;%s — %s\007' "$short" "$cmd_str" >/dev/tty ) 2>/dev/null || true
 fi
 
-# Always ring the bell so you get *some* feedback if visual notifications
-# are suppressed by Focus/DND or missing permissions. Subshell so the
-# redirect's own failure (e.g. no controlling tty) gets swallowed.
+# 2. TTS — detached subshell so the prompt returns immediately.
+if (( speak )) && command -v say >/dev/null 2>&1; then
+    ( say "$speech" >/dev/null 2>&1 & ) 2>/dev/null || true
+fi
+
+# 3. Bell.
 ( printf '\a' >/dev/tty ) 2>/dev/null || true
 
 exit $status
