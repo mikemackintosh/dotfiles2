@@ -120,7 +120,7 @@ done
 
 chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
          "$DOTFILES/bin/memories" "$DOTFILES/bin/tmux-sessionizer" \
-         "$DOTFILES/bin/notify" \
+         "$DOTFILES/bin/notify" "$DOTFILES/bin/git-review" \
          "$DOTFILES/githooks/pre-push" "$DOTFILES/githooks/pre-commit"
 
 if [[ -d "$BACKUP" ]]; then

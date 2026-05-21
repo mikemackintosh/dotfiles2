@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# git-review — clone a GitHub PR into a fresh /tmp dir and launch
+# Claude with the review prompt. Works as `git review …` because git
+# auto-discovers `git-*` on PATH.
+#
+# Usage:
+#   git review <owner/repo> <pr-number>
+#   git review <github-pr-url>
+#
+# Example:
+#   git review wealthsimple/orbital 1234
+#   git review https://github.com/wealthsimple/orbital/pull/1234
+#
+# What it does:
+#   1. Shallow-clone the repo to /tmp/git-review-<repo>-<pr>.XXXX
+#   2. Fetch the PR head ref and check it out
+#   3. cd into the workdir
+#   4. Launch claude with claude/prompts/review.md as the initial
+#      message, telling it to use the MCPLocker GitHub tools to pull
+#      PR metadata and form a review.
+
+set -euo pipefail
+
+PROMPT_FILE="$HOME/.dotfiles/claude/prompts/review.md"
+[[ -f $PROMPT_FILE ]] || { echo "missing prompt: $PROMPT_FILE" >&2; exit 1; }
+command -v claude >/dev/null 2>&1 || { echo "claude CLI not found" >&2; exit 1; }
+
+owner=""; repo=""; pr=""
+if [[ ${1:-} =~ ^https?://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)/?$ ]]; then
+    owner=${BASH_REMATCH[1]}
+    repo=${BASH_REMATCH[2]}
+    pr=${BASH_REMATCH[3]}
+elif [[ $# -eq 2 && ${1:-} =~ ^([^/]+)/([^/]+)$ && ${2:-} =~ ^[0-9]+$ ]]; then
+    owner=${BASH_REMATCH[1]}
+    repo=${BASH_REMATCH[2]}
+    pr=$2
+else
+    cat >&2 <<EOF
+usage:
+  git review <owner/repo> <pr-number>
+  git review <github-pr-url>
+EOF
+    exit 2
+fi
+
+workdir=$(mktemp -d "/tmp/git-review-${repo}-${pr}.XXXXXX")
+echo "→ Cloning $owner/$repo (shallow) into $workdir"
+git clone --depth=1 "https://github.com/$owner/$repo.git" "$workdir" >/dev/null 2>&1 \
+    || { echo "clone failed" >&2; exit 1; }
+
+echo "→ Fetching PR #$pr"
+git -C "$workdir" fetch --depth=1 origin "pull/$pr/head:pr-$pr" >/dev/null 2>&1 \
+    || { echo "fetch failed (PR #$pr exists?)" >&2; exit 1; }
+git -C "$workdir" checkout "pr-$pr" >/dev/null 2>&1
+
+# Build the initial prompt: review template + the specific PR URL so
+# Claude can reach for it via MCPLocker without having to ask.
+initial=$(
+    cat "$PROMPT_FILE"
+    echo
+    echo "---"
+    echo "PR to review: https://github.com/$owner/$repo/pull/$pr"
+    echo "Local checkout: $workdir (already at the PR's HEAD)"
+)
+
+cd "$workdir"
+echo "→ Launching Claude in $workdir"
+exec claude "$initial"
