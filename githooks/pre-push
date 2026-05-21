@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# pre-push — scan the repo with gitleaks before allowing a push.
+#
+# Wired in globally via core.hooksPath in ~/.dotfiles/.gitconfig so it
+# applies to every repo. No-ops cleanly if gitleaks isn't installed.
+#
+# Bypass once:   git push --no-verify
+# Disable for a single repo:
+#   git config --local core.hooksPath .git/hooks
+
+set -uo pipefail
+
+# Drain stdin (pre-push hooks receive ref tuples we don't need here)
+# so git doesn't see SIGPIPE if we exit early.
+cat >/dev/null
+
+command -v gitleaks >/dev/null 2>&1 || exit 0
+
+if ! gitleaks detect --no-banner --redact --log-level=warn; then
+    cat >&2 <<'EOF'
+
+gitleaks: secrets detected in commit history — push blocked.
+
+  Review the findings above, remove the offending content, then either
+  amend the affected commits or rewrite history before pushing.
+
+  Bypass once:    git push --no-verify
+  Disable repo:   git config --local core.hooksPath .git/hooks
+EOF
+    exit 1
+fi

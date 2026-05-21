@@ -1,0 +1,12 @@
+# gitleaks config for this repo. Extends the default ruleset.
+
+[extend]
+useDefault = true
+
+# Vendored third-party code (vim plugins, etc.) is checked in verbatim
+# by design and not something we audit. Skip it.
+[allowlist]
+description = "Skip vendored third-party code"
+paths = [
+    '''vim/pack/vendor/.*''',
+]
