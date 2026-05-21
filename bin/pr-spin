@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# pr-spin — describe an issue, get a fresh branch + tmux session +
+# Claude running with the make-pr prompt.
+#
+# Usage:
+#   pr-spin "<description>"              # current dir's repo
+#   pr-spin <repo-path> "<description>"  # specify the repo
+#
+# Example:
+#   pr-spin "validate email length before save"
+#   pr-spin ~/go/src/.../orbital "remove unused redis client"
+#
+# What it does:
+#   1. Slugifies the description into a branch name (feat/<slug>-<ts>)
+#   2. Fetches origin/main, branches off it
+#   3. Spins up a tmux session for the repo and starts claude in it
+#      with claude/prompts/make-pr.md + the description as initial
+#      message. Switches you to that session.
+
+set -euo pipefail
+
+PROMPT_FILE="$HOME/.dotfiles/claude/prompts/make-pr.md"
+[[ -f $PROMPT_FILE ]] || { echo "missing prompt: $PROMPT_FILE" >&2; exit 1; }
+command -v claude >/dev/null 2>&1 || { echo "claude CLI not found" >&2; exit 1; }
+command -v tmux   >/dev/null 2>&1 || { echo "tmux not found" >&2; exit 1; }
+
+case $# in
+    1) repo=$(pwd); desc=$1 ;;
+    2) repo=$(cd "$1" && pwd); desc=$2 ;;
+    *) echo 'usage: pr-spin [repo-path] "<description>"' >&2; exit 2 ;;
+esac
+
+[[ -d $repo/.git ]] || { echo "not a git repo: $repo" >&2; exit 1; }
+
+# Slugify: lowercase, non-alnum → '-', collapse runs, trim, cap length.
+slug=$(printf '%s' "$desc" \
+    | tr '[:upper:]' '[:lower:]' \
+    | LC_ALL=C sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+    | cut -c1-40 \
+    | sed -E 's/-+$//')
+[[ -z $slug ]] && slug="task"
+branch="feat/${slug}-$(date +%s)"
+
+cd "$repo"
+echo "→ Fetching origin/main"
+git fetch --quiet origin main
+echo "→ Branching $branch off origin/main"
+git checkout -q -b "$branch" origin/main
+
+# Seed the prompt to a temp file so tmux doesn't have to quote it.
+prompt_path=$(mktemp -t pr-spin-prompt.XXXXXX)
+{
+    cat "$PROMPT_FILE"
+    echo
+    echo "---"
+    echo "Task:"
+    echo "$desc"
+    echo
+    echo "(Branch '$branch' is already checked out off origin/main.)"
+} > "$prompt_path"
+
+# tmux session name — repo basename, sanitized; discriminate on conflict.
+session=$(basename "$repo" | tr '.:' '__')
+if tmux has-session -t "$session" 2>/dev/null; then
+    session="${session}-${slug:0:12}"
+fi
+
+# Command run inside the new session's first pane: launch claude with
+# the prompt file as the initial message, then clean up the temp file.
+launch_cmd="claude \"\$(cat '$prompt_path')\"; rm -f '$prompt_path'"
+
+if [[ -z "${TMUX:-}" && -z "$(pgrep tmux || true)" ]]; then
+    exec tmux new-session -s "$session" -c "$repo" "$launch_cmd"
+fi
+
+tmux new-session -ds "$session" -c "$repo" "$launch_cmd"
+if [[ -z "${TMUX:-}" ]]; then
+    exec tmux attach -t "$session"
+else
+    exec tmux switch-client -t "$session"
+fi
