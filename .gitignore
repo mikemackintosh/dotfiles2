@@ -17,6 +17,10 @@
 # Per-machine project list for bin/tmux-sessionizer
 .tmux-sessionizer-paths
 
+# Override the global ~/.gitignore that excludes CLAUDE.md by default —
+# this repo deliberately tracks its CLAUDE.md as house-rules documentation.
+!CLAUDE.md
+
 # vim runtime dirs (created on-demand by ~/.vim/vimrc)
 vim/undo/
 vim/backup/
