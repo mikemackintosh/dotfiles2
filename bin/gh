@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# gh — intentional shim that shadows any real GitHub CLI on PATH.
+#
+# This machine never uses `gh`. See:
+#   ~/.dotfiles/CLAUDE.md  (house rules)
+#
+# Exists as a defense-in-depth backup to the Bash(gh) / Bash(gh *)
+# entries in ~/.dotfiles/claude/settings.json — if an LLM somehow
+# bypasses the permission deny, this shim still stops the call and
+# tells the agent what to do instead.
+
+cat <<'EOF' >&2
+gh is intentionally disabled on this machine.
+
+For any GitHub operation (PRs, issues, comments, releases, workflows,
+repo metadata), use the MCPLocker GitHub MCP tools instead:
+
+    mcp__claude_ai_MCPLocker__github__*
+
+For plain local git work (status / log / diff / commit / push /
+fetch / etc.), use the real `git` binary — that's fine. Only `gh`
+is blocked.
+
+If you are an LLM that just tried to run gh: stop, switch to the MCP
+tools, and continue. Don't try to invoke the real gh binary by
+absolute path — this rule is not a bug.
+EOF
+
+exit 127
