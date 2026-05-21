@@ -33,12 +33,15 @@ setopt auto_param_keys
 setopt auto_param_slash
 
 # Completion
+# auto_menu: second Tab brings up the menu and cycles.
+# menu_complete is intentionally NOT set — it would replace the typed
+# text with the first match immediately, which clobbers ambiguous
+# inputs like `ssh <Tab>` (huge user list as first match).
 setopt auto_list
 setopt auto_menu
 setopt always_to_end
 setopt complete_in_word
 setopt flow_control
-setopt menu_complete
 
 # History
 export HISTSIZE=50000
