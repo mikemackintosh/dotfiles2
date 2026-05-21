@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # notify <cmd...> — run a command, then fire a macOS notification with
-# its outcome (success/failure + exit code) and elapsed time. The
-# command's exit status is propagated.
+# its outcome (success/failure + exit code) and elapsed time. Always
+# rings the terminal bell as a fallback audible cue. The command's
+# exit status is propagated.
 #
 #   notify go test ./...
-#   notify make build && notify make deploy
+#   notify make build
 #
-# Notifications use Apple Script's `display notification`. The
-# notification's body is the command line; the title encodes success
-# and duration. macOS will only show notifications if Terminal/iTerm
-# is allowed in System Settings > Notifications.
+# Backends, in preference order:
+#   1. terminal-notifier (brew install terminal-notifier) — recommended;
+#      it appears as its own entry in System Settings > Notifications
+#      so permissions are easy to grant and actually stick.
+#   2. osascript `display notification` — exits 0 even when the system
+#      drops the notification silently, so reliability varies by macOS
+#      permission state. Used as a fallback.
+#   3. Terminal bell (\a) — always runs, in case both above are muted.
 
 set -uo pipefail
 
@@ -33,12 +38,30 @@ fi
 
 if (( status == 0 )); then
     title="✓ done in $dur"
+    sound="Glass"
 else
     title="✗ failed (exit $status) in $dur"
+    sound="Basso"
 fi
 
-# Escape backslashes and double-quotes for AppleScript string literal.
-escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
-osascript -e "display notification \"$(escape "$cmd_str")\" with title \"$(escape "$title")\"" 2>/dev/null || true
+if command -v terminal-notifier >/dev/null 2>&1; then
+    terminal-notifier \
+        -title   "$title" \
+        -message "$cmd_str" \
+        -sound   "$sound" \
+        >/dev/null 2>&1 || true
+else
+    # Fallback to osascript. Escape backslashes and double-quotes for
+    # the AppleScript string literal.
+    escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+    osascript \
+        -e "display notification \"$(escape "$cmd_str")\" with title \"$(escape "$title")\" sound name \"$sound\"" \
+        2>/dev/null || true
+fi
+
+# Always ring the bell so you get *some* feedback if visual notifications
+# are suppressed by Focus/DND or missing permissions. Subshell so the
+# redirect's own failure (e.g. no controlling tty) gets swallowed.
+( printf '\a' >/dev/tty ) 2>/dev/null || true
 
 exit $status
