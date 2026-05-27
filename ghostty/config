@@ -1,0 +1,5 @@
+# Ghostty configuration.
+# This file is symlinked to ~/.config/ghostty/config by install.sh.
+# Themes live in ~/.config/ghostty/themes (also symlinked).
+
+theme = midnight-mint
