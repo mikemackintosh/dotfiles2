@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# tmux-status-right — compose the right side of tmux's status line.
+# Each data segment runs its bin/ helper and only renders if non-empty,
+# so we don't leave colored gaps when (e.g.) nothing is playing or no
+# AirPods are connected. Caching lives inside the helpers.
+
+set -uo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+emit() {
+    local bg=$1 fg=$2 prefix=$3 data=$4
+    [[ -z $data ]] && return
+    printf '#[bg=%s,fg=%s] %s%s #[bg=default]' "$bg" "$fg" "$prefix" "$data"
+}
+
+# Data helpers
+weather=$("$DIR/weather"          2>/dev/null)
+music=$(  "$DIR/now-playing"      2>/dev/null)
+airpods=$("$DIR/airpods-battery"  2>/dev/null)
+battery=$("$DIR/battery-info"     2>/dev/null)
+
+emit '#6bb8d9' '#1a1b26' '☁ '  "$weather"
+emit '#bb9af7' '#1a1b26' ''     "$music"
+emit '#ff9e64' '#1a1b26' '🎧 '  "$airpods"
+emit '#f7768e' '#1a1b26' ''     "$battery"
+
+# Time segment is always rendered (existing behavior).
+printf '#[bg=#e0af68,fg=#1a1b26,bold] %s #[default]' "$(date +%H:%M)"

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# battery-info — current battery state as one compact token.
+#   discharging: "🔋 26%"
+#   charging:    "⚡ 26%"
+#   on AC:       "🔌 100%"
+# Silent (exits 0 with no output) on desktops without an internal battery.
+
+set -uo pipefail
+
+out=$(pmset -g batt 2>/dev/null)
+[[ -z $out ]] && exit 0
+echo "$out" | grep -q InternalBattery || exit 0
+
+pct=$(printf '%s' "$out" | grep -oE '[0-9]+%' | head -1)
+state=$(printf '%s' "$out" | awk -F';' '/InternalBattery/ {print $2}' | tr -d ' ')
+
+case $state in
+    *charging*)    glyph='⚡' ;;
+    *discharging*) glyph='🔋' ;;
+    *)             glyph='🔌' ;;
+esac
+
+printf '%s %s\n' "$glyph" "$pct"

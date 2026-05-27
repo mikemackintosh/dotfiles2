@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# weather — short local temp + humidity from wttr.in.
+# Cached 10 minutes in $XDG_CACHE_HOME/dotfiles/weather to avoid hammering
+# the network from tmux's 5s status refresh. Silent if the cache is empty
+# and the network call fails.
+
+set -uo pipefail
+
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+cache="$cache_dir/weather"
+mkdir -p "$cache_dir"
+
+if [[ -f $cache ]]; then
+    age=$(( $(date +%s) - $(stat -f %m "$cache") ))
+    if (( age < 600 )); then
+        cat "$cache"
+        exit 0
+    fi
+fi
+
+# %t is "+21°C" (with sign), %h is humidity like "99%". Trim leading + on temp.
+result=$(curl -sf --max-time 4 'wttr.in/?format=%t+H:%h' 2>/dev/null | sed 's/^+//')
+if [[ -n $result ]]; then
+    printf '%s\n' "$result" | tee "$cache"
+elif [[ -f $cache ]]; then
+    cat "$cache"
+fi
