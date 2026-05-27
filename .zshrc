@@ -137,65 +137,26 @@ eval "$(direnv hook zsh)"
 # zsh-autosuggestions: fish-style greyed suggestion from history
 source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 
-# Tab: context-sensitive completion.
+# Tab → completion (filesystem / commands / args). Always real menu
+# completion; no autosuggestion path here.
+bindkey '^I' expand-or-complete
+
+# Space → the first space behaves like a normal space. A second
+# consecutive space (i.e. pressed when the buffer already ends in
+# one) accepts the autosuggestion, then inserts that trailing space.
+# This way `cd ` won't snap-grab a history guess on the first space.
 #
-#   1. Mid-word (`cat a<Tab>`, `src/m<Tab>`): always real menu
-#      completion. User is refining a specific string.
-#   2. Word boundary (trailing space): inspect the buffer. If it
-#      mentions any known file-arg command (cat, rm, vim, cd, git
-#      add, grep, cp, …), do real filesystem completion. Otherwise
-#      (ssh, docker, kubectl, …) accept the zsh-autosuggestions guess
-#      if one is shown; fall back to completion if not.
-#
-# Customise by appending to $_TAB_FILE_CMDS before this widget runs
-# (e.g. from a private zsh file).
-#
-# Explicit autosuggestion-accept keys still work regardless:
-#   Right-arrow / Ctrl-E   accept the whole guess
+# Explicit autosuggestion-accept keys still work:
+#   Right-arrow / Ctrl-E   accept the whole guess (no trailing space)
 #   Ctrl-F                 accept one word
-typeset -ga _TAB_FILE_CMDS=(
-    # File ops
-    cat less more head tail tac
-    rm rmdir cp mv ln mkdir touch
-    chmod chown chgrp
-    ls ll l la file stat du wc
-    # Editors / viewers
-    vim nvim vi nano emacs code subl
-    bat glow jq yq
-    # Archives
-    gzip gunzip zip unzip tar
-    # Text tools that take files
-    diff patch grep rg ag sed awk
-    # Navigation / sourcing
-    cd pushd popd source .
-    # Common subcommands (git, etc.) that take files
-    add checkout restore co
-)
-_tab_smart() {
-    # Mid-word — always real completion.
-    if [[ ! "$LBUFFER" =~ [[:space:]]$ ]]; then
-        zle expand-or-complete
-        return
-    fi
-    # Word boundary — if any token in the buffer is a file-arg
-    # command, prefer real filesystem completion over the
-    # history-based autosuggestion.
-    local w
-    for w in ${(z)LBUFFER}; do
-        if (( ${_TAB_FILE_CMDS[(Ie)$w]} )); then
-            zle expand-or-complete
-            return
-        fi
-    done
-    # No file-arg context — accept the autosuggestion if there is one.
-    if [[ -n "$POSTDISPLAY" ]]; then
+_space_accept_or_self() {
+    if [[ $LBUFFER == *' ' && -n $POSTDISPLAY ]]; then
         zle autosuggest-accept
-    else
-        zle expand-or-complete
     fi
+    zle self-insert
 }
-zle -N _tab_smart
-bindkey '^I' _tab_smart
+zle -N _space_accept_or_self
+bindkey ' ' _space_accept_or_self
 
 # zsh-syntax-highlighting: MUST be sourced last (hooks into ZLE)
 source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
