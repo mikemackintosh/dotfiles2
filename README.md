@@ -8,12 +8,14 @@ shell where possible.
 
 ```sh
 git clone <repo-url> ~/.dotfiles
-~/.dotfiles/install.sh                   # idempotent symlink + chmod pass
-brew bundle --file=~/.dotfiles/Brewfile  # install all deps
+~/.dotfiles/install.sh                   # symlinks + installs brew + brew bundle
 
 # Identity (never committed)
 cp ~/.dotfiles/gitconfig.private.example ~/.private/gitconfig
 $EDITOR ~/.private/gitconfig             # fill in name/email/signing key
+
+# Optional: apply macOS system prefs (scrolling, cursor color, Dock)
+macos-defaults
 ```
 
 Verify everything afterwards:
@@ -140,6 +142,21 @@ plus `~/.dotfiles`. Override per-machine via `~/.dotfiles/.tmux-sessionizer-path
 ~/.dotfiles
 ~/personal/blog
 ```
+
+### `macos-defaults` — apply system preferences
+
+One-shot script that configures the Mac the way I like it: disables natural
+scrolling, sets a bright green (`#95ef00`) cursor with an orange (`#ff7f00`)
+outline, rewrites the Dock to Messages / System Settings / Chrome plus an
+`/Applications` folder and a `~/Downloads` stack (fan reveal) on the right
+side, and tweaks Finder (path bar, status bar, `$HOME` in the sidebar).
+Idempotent. Cursor color needs a logout to render.
+
+```sh
+macos-defaults
+```
+
+Requires `dockutil` (in the Brewfile).
 
 ## Prompt
 

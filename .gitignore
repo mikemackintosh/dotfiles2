@@ -26,3 +26,9 @@ vim/undo/
 vim/backup/
 vim/swap/
 vim/.netrwhist
+
+# Claude Code per-project state (settings.local.json etc.) — not for sharing
+.claude/
+
+# Go workspace that lives inside this repo (real projects, not dotfiles)
+go/
