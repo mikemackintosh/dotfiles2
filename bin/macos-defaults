@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# macos-defaults — apply Mike's macOS system preferences.
+#
+# Idempotent; safe to re-run. Cursor color changes need a logout
+# (or a toggle of System Settings → Accessibility → Display →
+# Pointer) before the new colors render.
+#
+# Usage:
+#   macos-defaults
+
+set -euo pipefail
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "macos-defaults: not on macOS" >&2
+    exit 1
+fi
+
+echo "Trackpad: enable natural scrolling, tap-to-click, tap-drag..."
+defaults write -g com.apple.swipescrolldirection -bool true
+# Tap-to-click + tap-drag (without drag lock). Each setting needs both
+# driver domains (built-in trackpad + bluetooth trackpad). Tap-to-click
+# also needs the user-level global; System Settings flips both.
+defaults write com.apple.AppleMultitouchTrackpad                 Clicking -bool true
+defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Clicking -bool true
+defaults write com.apple.AppleMultitouchTrackpad                 Dragging -bool true
+defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Dragging -bool true
+defaults write com.apple.AppleMultitouchTrackpad                 DragLock -bool false
+defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad DragLock -bool false
+defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
+defaults              write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
+
+echo "Accessibility: bright green cursor (#95ef00) with orange (#ff7f00) outline..."
+# Sequoia (15+) stores cursor colors as nested dicts of named reals
+# and gates the whole thing on a cursorIsCustomized bool. Pre-Sequoia
+# used cursorFillColor/cursorOutlineColor as RGBA arrays — those keys
+# are no longer read, so we clean them up if found. The domain is
+# TCC-protected; the terminal app (not the user) needs Full Disk
+# Access. plutil edits the file directly, then we kick cfprefsd so it
+# drops its cached copy.
+ua_plist="$HOME/Library/Preferences/com.apple.universalaccess.plist"
+if  plutil -replace cursorFill            -json '{"red":0.584314,"green":0.937255,"blue":0.0,"alpha":1.0}' "$ua_plist" 2>/dev/null \
+ && plutil -replace cursorOutline         -json '{"red":1.0,"green":0.498039,"blue":0.0,"alpha":1.0}'      "$ua_plist" 2>/dev/null \
+ && plutil -replace cursorIsCustomized    -bool true "$ua_plist" 2>/dev/null \
+ && plutil -replace mouseDriverCursorSize -json 2.5  "$ua_plist" 2>/dev/null; then
+    plutil -remove cursorFillColor    "$ua_plist" 2>/dev/null || true
+    plutil -remove cursorOutlineColor "$ua_plist" 2>/dev/null || true
+    killall cfprefsd 2>/dev/null || true
+    cursor_set=1
+else
+    cursor_set=0
+    echo "  skipped — terminal lacks permission to write $ua_plist." >&2
+    echo "  Grant Full Disk Access in System Settings → Privacy & Security," >&2
+    echo "  add your terminal app, restart it, and re-run macos-defaults." >&2
+fi
+
+echo "Dock: strip to Messages, System Settings, Chrome..."
+if ! command -v dockutil >/dev/null 2>&1; then
+    echo "macos-defaults: dockutil missing — run 'brew bundle --file=~/.dotfiles/Brewfile'" >&2
+    exit 1
+fi
+dockutil --no-restart --remove all >/dev/null
+dockutil --no-restart --add '/System/Applications/Messages.app'        >/dev/null
+dockutil --no-restart --add '/System/Applications/System Settings.app' >/dev/null
+dockutil --no-restart --add '/Applications/Google Chrome.app'          >/dev/null
+# Right side (persistent-others), left-to-right: Applications, then
+# Downloads as a stack with the Fan / "accordion" reveal. Trash is
+# system-managed and stays at the far right.
+dockutil --no-restart --add '/Applications'   --view grid --display stack >/dev/null
+dockutil --no-restart --add "$HOME/Downloads" --view fan  --display stack >/dev/null
+killall Dock
+
+echo "Finder: show path bar + status bar, add \$HOME to sidebar favorites..."
+defaults write com.apple.finder ShowPathbar   -bool true
+defaults write com.apple.finder ShowStatusBar -bool true
+# Sidebar favorites are bookmark blobs in com.apple.sidebarlists.
+# /usr/bin/sfltool is the native (undocumented but stable since 10.11)
+# manipulator for LSSharedFileList. Dedups by URL on re-add.
+if [[ -x /usr/bin/sfltool ]]; then
+    /usr/bin/sfltool add-item com.apple.LSSharedFileList.FavoriteItems \
+        "file://${HOME}/" >/dev/null 2>&1 || \
+        echo "  sfltool add-item failed; add Home manually via Finder → Settings → Sidebar" >&2
+else
+    echo "  /usr/bin/sfltool missing — skipping sidebar add" >&2
+fi
+killall Finder
+
+echo
+echo "Done. Tap-to-click, tap-drag, and cursor SIZE need a logout to take"
+echo "effect — those settings are read once at session start. Cursor"
+echo "COLORS apply live (CFPrefs notification), and natural scrolling"
+echo "flips immediately."
+if (( ! cursor_set )); then
+    echo "(Cursor colors/size were skipped — see the Full Disk Access note above.)"
+fi
+
+if [[ ! -t 0 ]]; then
+    exit 0
+fi
+
+echo
+printf 'Press ENTER to log out now, or ESC to skip: '
+# -s: silent; -n1: one keystroke; ENTER comes through as empty (newline
+# terminates the read), ESC as $'\e'. Non-zero exit (Ctrl-D) means skip.
+if ! IFS= read -rsn1 key; then
+    echo
+    exit 0
+fi
+echo
+case $key in
+    '')
+        echo "Logging out..."
+        # Raw "rlgo" Apple event — logout without the 60s confirmation
+        # dialog that `System Events → log out` would otherwise show.
+        osascript -e 'tell application "loginwindow" to «event aevtrlgo»'
+        ;;
+    *)
+        echo "Skipped — log out later to finish applying changes."
+        ;;
+esac
