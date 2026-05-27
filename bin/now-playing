@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# now-playing — currently playing track as "♪ Artist — Title".
+# Probes Spotify first, then Music.app. Silent when nothing's playing.
+# Cached 3s so tmux's status refresh doesn't spam osascript.
+
+set -uo pipefail
+
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+cache="$cache_dir/now-playing"
+mkdir -p "$cache_dir"
+
+if [[ -f $cache ]]; then
+    age=$(( $(date +%s) - $(stat -f %m "$cache") ))
+    if (( age < 3 )); then
+        cat "$cache"
+        exit 0
+    fi
+fi
+
+out=""
+if pgrep -x Spotify >/dev/null 2>&1; then
+    out=$(osascript <<'AS' 2>/dev/null
+tell application "Spotify"
+    if player state is playing then
+        return (artist of current track as string) & " — " & (name of current track as string)
+    end if
+end tell
+AS
+)
+fi
+if [[ -z $out ]] && pgrep -x Music >/dev/null 2>&1; then
+    out=$(osascript <<'AS' 2>/dev/null
+tell application "Music"
+    if player state is playing then
+        return (artist of current track as string) & " — " & (name of current track as string)
+    end if
+end tell
+AS
+)
+fi
+
+if [[ -n $out ]]; then
+    printf '♪ %s\n' "$out" | tee "$cache"
+else
+    : > "$cache"
+fi

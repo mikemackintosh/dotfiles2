@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# airpods-battery — "<device name> (<pct>%)" for the connected Bluetooth audio
+# device that exposes a BatteryPercent, or empty if none.
+#
+# Reads ioreg (fast, ~50ms). Cached 30s. Best-effort — Apple changes the
+# property layout occasionally, so silent failure is the right behavior.
+
+set -uo pipefail
+
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+cache="$cache_dir/airpods"
+mkdir -p "$cache_dir"
+
+if [[ -f $cache ]]; then
+    age=$(( $(date +%s) - $(stat -f %m "$cache") ))
+    if (( age < 30 )); then
+        cat "$cache"
+        exit 0
+    fi
+fi
+
+# -r recurses, -l prints all properties. -k filters to nodes that define the
+# key, so we only see nodes carrying a battery reading. We use sed rather
+# than awk's match()-with-array because BSD awk (macOS default) doesn't
+# support the array form.
+ioreg_out=$(ioreg -r -l -k '"BatteryPercent"' 2>/dev/null)
+name=$(printf '%s' "$ioreg_out" | sed -nE 's/.*"Product" = "([^"]+)".*/\1/p' | head -1)
+pct=$( printf '%s' "$ioreg_out" | sed -nE 's/.*"BatteryPercent" = ([0-9]+).*/\1/p' | head -1)
+if [[ -n $name && -n $pct ]]; then
+    result="$name ($pct%)"
+else
+    result=""
+fi
+
+if [[ -n $result ]]; then
+    printf '%s\n' "$result" | tee "$cache"
+else
+    : > "$cache"
+fi
