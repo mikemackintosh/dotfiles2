@@ -37,6 +37,7 @@ bin/                                      → user scripts (on $PATH)
   git-review                                local PR review via /tmp + claude
   pr-spin                                   spin up a "PR making" session
   notify                                    osascript notification wrapper
+  macos-defaults                            apply scrolling / cursor / Dock prefs
 claude/                                   → Claude Code config
   settings.json                             symlinked into ~/.claude/
   statusline.sh                             symlinked into ~/.claude/
