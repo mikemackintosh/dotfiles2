@@ -146,7 +146,7 @@ chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
          "$DOTFILES/bin/memories" "$DOTFILES/bin/tmux-sessionizer" \
          "$DOTFILES/bin/notify" "$DOTFILES/bin/git-review" \
          "$DOTFILES/bin/pr-spin" "$DOTFILES/bin/gh" \
-         "$DOTFILES/bin/macos-defaults" \
+         "$DOTFILES/bin/macos-defaults" "$DOTFILES/bin/claude-on" \
          "$DOTFILES/bin/battery-info" "$DOTFILES/bin/weather" \
          "$DOTFILES/bin/now-playing" "$DOTFILES/bin/airpods-battery" \
          "$DOTFILES/bin/tmux-status-right" \

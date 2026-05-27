@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# claude-on — start (or attach) a 2-pane tmux session for a project:
+# left pane runs `claude`, right pane is an interactive shell, both
+# in the project directory.
+#
+# Usage:
+#   claude-on                            # fzf-pick a dir under ~/Projects/
+#   claude-on <name>                     # use ~/Projects/<name>
+#   claude-on <repo-url>                 # clone into ~/Projects/<name> if
+#                                        # missing, then open
+#
+# Examples:
+#   claude-on
+#   claude-on amber
+#   claude-on https://github.com/getangry/amber
+#   claude-on git@github.com:getangry/amber.git
+#
+# Bound to `prefix + a` inside tmux (see tmux.conf).
+
+set -euo pipefail
+
+PROJECTS="$HOME/Projects"
+
+command -v tmux   >/dev/null || { echo "tmux not found"   >&2; exit 1; }
+command -v claude >/dev/null || { echo "claude not found" >&2; exit 1; }
+
+arg="${1:-}"
+
+# Resolve target directory.
+if [[ -z $arg ]]; then
+    command -v fzf >/dev/null || { echo "fzf not found (needed for the picker)" >&2; exit 1; }
+    [[ -d $PROJECTS ]] || { echo "no $PROJECTS — pass a name or URL instead" >&2; exit 1; }
+    target=$(find "$PROJECTS" -mindepth 1 -maxdepth 1 -type d \( -name '.*' -prune -o -print \) 2>/dev/null \
+        | sort \
+        | fzf --prompt="claude-on > " --no-multi --height 60% --reverse)
+    [[ -z $target ]] && exit 0
+elif [[ $arg =~ ^(https?://|git@|ssh://|gh:|github:|ghub:) ]]; then
+    repo=$(basename "$arg" .git)
+    target="$PROJECTS/$repo"
+    if [[ ! -d $target ]]; then
+        mkdir -p "$PROJECTS"
+        git clone "$arg" "$target"
+    fi
+else
+    target="$PROJECTS/$arg"
+    [[ -d $target ]] || { echo "no such project: $target" >&2; exit 1; }
+fi
+
+# tmux session names can't contain '.' or ':'.
+session=$(basename "$target" | tr '.:' '__')
+
+if ! tmux has-session -t="$session" 2>/dev/null; then
+    tmux new-session  -d  -s "$session" -c "$target"
+    tmux split-window -h  -t "$session" -c "$target"
+    # Pane indices are 1-based (see tmux.conf base-index/pane-base-index).
+    tmux send-keys    -t "$session:1.1" 'claude' Enter
+    tmux select-pane  -t "$session:1.1"
+fi
+
+if [[ -z "${TMUX:-}" ]]; then
+    exec tmux attach        -t "$session"
+else
+    exec tmux switch-client -t "$session"
+fi
