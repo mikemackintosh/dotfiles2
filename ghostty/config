@@ -3,3 +3,9 @@
 # Themes live in ~/.config/ghostty/themes (also symlinked).
 
 theme = midnight-mint
+
+# Always start new surfaces in $HOME rather than inheriting the cwd of
+# the focused window (which is otherwise the default and lands you in
+# whatever dir the last window was in).
+working-directory = home
+window-inherit-working-directory = false
