@@ -30,7 +30,9 @@ arg="${1:-}"
 if [[ -z $arg ]]; then
     command -v fzf >/dev/null || { echo "fzf not found (needed for the picker)" >&2; exit 1; }
     [[ -d $PROJECTS ]] || { echo "no $PROJECTS — pass a name or URL instead" >&2; exit 1; }
-    target=$(find "$PROJECTS" -mindepth 1 -maxdepth 1 -type d \( -name '.*' -prune -o -print \) 2>/dev/null \
+    # -L because $PROJECTS is a symlink into the GOPATH layout and we
+    # need find to descend into it to list child dirs.
+    target=$(find -L "$PROJECTS" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null \
         | sort \
         | fzf --prompt="claude-on > " --no-multi --height 60% --reverse)
     [[ -z $target ]] && exit 0
