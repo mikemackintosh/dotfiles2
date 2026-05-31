@@ -138,20 +138,50 @@ _zp_preexec() { _ZP_CMD_START=$EPOCHSECONDS; }
 add-zsh-hook preexec _zp_preexec
 
 # HUD segments: weather / now-playing / AirPods / battery, sourced from
-# bin/ helpers. The helpers cache their own data; the prompt also caches
-# for 30s so we don't fork 4 processes on every keystroke. Colors are
-# fixed (theme-independent) so the segments read as "system info".
-typeset -g _ZP_HUD_AT=0
+# bin/ helpers. Colors are fixed (theme-independent) so the segments read
+# as "system info".
+#
+# These run ASYNC: a background job forks the four helpers off the critical
+# path and pipes their values back; an fd-readable callback ingests them
+# and repaints via `zle reset-prompt`. The prompt never blocks on a helper
+# — notably weather, which can spend up to 4s on a cold curl to wttr.in.
+# At most one refresh is in flight at a time, and no more than one per 30s.
+typeset -g _ZP_HUD_AT=0 _ZP_HUD_FD=
 typeset -g _ZP_HUD_WEATHER="" _ZP_HUD_MUSIC=""
 typeset -g _ZP_HUD_AIRPODS="" _ZP_HUD_BATTERY=""
+
+# Called by zle when the background job's pipe becomes readable (i.e. the
+# helpers finished and flushed their four lines). Empty IFS preserves the
+# values verbatim, including the spaces in e.g. "21°C H:60%".
+_zp_hud_callback() {
+    local fd=$1
+    IFS= read -r -u $fd _ZP_HUD_WEATHER
+    IFS= read -r -u $fd _ZP_HUD_MUSIC
+    IFS= read -r -u $fd _ZP_HUD_AIRPODS
+    IFS= read -r -u $fd _ZP_HUD_BATTERY
+    zle -F $fd          # unregister this handler
+    exec {fd}<&-        # close the pipe
+    _ZP_HUD_FD=
+    _zp_render          # rebuild PROMPT with the fresh HUD values…
+    zle reset-prompt    # …and repaint (precmd is NOT re-run by reset-prompt)
+}
+
 _zp_refresh_hud() {
     (( EPOCHSECONDS - _ZP_HUD_AT < 30 )) && return
+    [[ -n $_ZP_HUD_FD ]] && return          # a refresh is already in flight
     _ZP_HUD_AT=$EPOCHSECONDS
     local DOTBIN="$HOME/.dotfiles/bin"
-    _ZP_HUD_WEATHER=$("$DOTBIN/weather"         2>/dev/null)
-    _ZP_HUD_MUSIC=$(  "$DOTBIN/now-playing"     2>/dev/null)
-    _ZP_HUD_AIRPODS=$("$DOTBIN/airpods-battery" 2>/dev/null)
-    _ZP_HUD_BATTERY=$("$DOTBIN/battery-info"    2>/dev/null)
+    # Each helper computes first (the slow part) then prints one line, so
+    # the pipe only becomes readable once all the work is done.
+    exec {_ZP_HUD_FD}< <(
+        local w m a b
+        w=$("$DOTBIN/weather"         2>/dev/null)
+        m=$("$DOTBIN/now-playing"     2>/dev/null)
+        a=$("$DOTBIN/airpods-battery" 2>/dev/null)
+        b=$("$DOTBIN/battery-info"    2>/dev/null)
+        print -r -- "$w"; print -r -- "$m"; print -r -- "$a"; print -r -- "$b"
+    )
+    zle -F $_ZP_HUD_FD _zp_hud_callback
 }
 
 # Cache the memory-file count keyed by "<dir>:<mtime>". A single stat
@@ -179,25 +209,12 @@ _zp_memory_count() {
     print $_ZP_MEM_COUNT
 }
 
-_zp_build_prompt() {
-    local last_status=$?
-    vcs_info
-    print ""
-
-    # Duration of the previous command, if any.
-    _ZP_CMD_DUR=""
-    if (( _ZP_CMD_START > 0 )); then
-        local d=$((EPOCHSECONDS - _ZP_CMD_START))
-        _ZP_CMD_START=0
-        (( d >= 1 )) && _ZP_CMD_DUR=$(_zp_fmt_dur $d)
-    fi
-
-    local branch=$vcs_info_msg_0_
-    if (( ${#branch} > 25 )); then
-        branch="${branch[1,24]}…"
-    fi
-    local mem_count=$(_zp_memory_count)
-
+# Assemble PROMPT from the per-command state captured in _zp_build_prompt
+# (status / branch / duration / mem count) plus the current HUD values.
+# Split out from the precmd hook so the async HUD callback can rebuild and
+# repaint without re-running precmd (which `zle reset-prompt` won't do).
+typeset -g _ZP_STATUS=0 _ZP_BRANCH="" _ZP_MEM=0
+_zp_render() {
     local p=""
     p+="%F{$_ZP_USER_BG}${_ZP_CAP}%f"
     p+="%K{$_ZP_USER_BG}%F{$_ZP_USER_FG}%B %n %b%f%k"
@@ -205,6 +222,7 @@ _zp_build_prompt() {
     p+="%K{$_ZP_DIR_BG}%F{$_ZP_DIR_FG}%B %(3c.…/%2~.%~) %b%f%k"
 
     local prev=$_ZP_DIR_BG
+    local branch=$_ZP_BRANCH
 
     if [[ -n $branch ]]; then
         p+="%K{$_ZP_GIT_BG}%F{$prev}${_ZP_SEP}%f%k"
@@ -212,9 +230,9 @@ _zp_build_prompt() {
         prev=$_ZP_GIT_BG
     fi
 
-    if (( mem_count > 0 )); then
+    if (( _ZP_MEM > 0 )); then
         p+="%K{$_ZP_BRAIN_BG}%F{$prev}${_ZP_SEP}%f%k"
-        p+="%K{$_ZP_BRAIN_BG}%F{$_ZP_BRAIN_FG}%B ${_ZP_BRAIN} ${mem_count} %b%f%k"
+        p+="%K{$_ZP_BRAIN_BG}%F{$_ZP_BRAIN_FG}%B ${_ZP_BRAIN} ${_ZP_MEM} %b%f%k"
         prev=$_ZP_BRAIN_BG
     fi
 
@@ -224,10 +242,10 @@ _zp_build_prompt() {
         prev=$_ZP_DUR_BG
     fi
 
-    # HUD segments: refresh at most every 30s. Each renders only if its
-    # helper returned data. Theme-independent colors mirror the tmux pills.
-    # Double '%' in helper output so zsh's prompt expander doesn't eat it.
-    _zp_refresh_hud
+    # HUD segments: each renders only if its helper returned data. Values
+    # are populated asynchronously (see _zp_refresh_hud). Theme-independent
+    # colors mirror the tmux pills. Double '%' so the prompt expander
+    # doesn't eat percent signs in helper output (e.g. "H:60%").
     local music=${_ZP_HUD_MUSIC//\%/%%}
     local airpods=${_ZP_HUD_AIRPODS//\%/%%}
     local battery=${_ZP_HUD_BATTERY//\%/%%}
@@ -258,14 +276,41 @@ _zp_build_prompt() {
     p+="%F{$_ZP_TIME_BG}${_ZP_END}%f"
 
     p+=$'\n'
-    if (( last_status == 0 )); then
+    if (( _ZP_STATUS == 0 )); then
         p+="%F{$_ZP_OK}%B❯%b%f "
     else
-        p+="%F{$_ZP_ERR}%B[${last_status}] ❯%b%f "
+        p+="%F{$_ZP_ERR}%B[${_ZP_STATUS}] ❯%b%f "
     fi
     typeset -g _ZP_FULL_PROMPT=$p
     PROMPT=$_ZP_FULL_PROMPT
     RPROMPT=
+}
+
+# precmd hook: capture the per-command state that's fixed for this prompt's
+# lifetime, kick off the async HUD refresh, then render. The HUD values may
+# still be stale here; the async callback repaints once they land.
+_zp_build_prompt() {
+    _ZP_STATUS=$?
+    vcs_info
+    print ""
+
+    # Duration of the previous command, if any.
+    _ZP_CMD_DUR=""
+    if (( _ZP_CMD_START > 0 )); then
+        local d=$((EPOCHSECONDS - _ZP_CMD_START))
+        _ZP_CMD_START=0
+        (( d >= 1 )) && _ZP_CMD_DUR=$(_zp_fmt_dur $d)
+    fi
+
+    local branch=$vcs_info_msg_0_
+    if (( ${#branch} > 25 )); then
+        branch="${branch[1,24]}…"
+    fi
+    _ZP_BRANCH=$branch
+    _ZP_MEM=$(_zp_memory_count)
+
+    _zp_refresh_hud
+    _zp_render
 }
 add-zsh-hook precmd _zp_build_prompt
 
