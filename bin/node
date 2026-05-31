@@ -16,8 +16,16 @@ set -euo pipefail
 
 image="${NODE_DOCKER_IMAGE:-node:20}"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "node(shim): docker not found on PATH — cannot run Node." >&2
+# Resolve docker even under a minimal PATH (e.g. Xcode build phases, which
+# often omit /usr/local/bin where Docker Desktop's CLI symlink lives).
+docker_bin="$(command -v docker 2>/dev/null || true)"
+if [[ -z "$docker_bin" ]]; then
+  for c in /usr/local/bin/docker /opt/homebrew/bin/docker "$HOME/.docker/bin/docker"; do
+    [[ -x "$c" ]] && { docker_bin="$c"; break; }
+  done
+fi
+if [[ -z "$docker_bin" ]]; then
+  echo "node(shim): docker not found on PATH or in known locations — cannot run Node." >&2
   exit 127
 fi
 
@@ -29,11 +37,11 @@ fi
 
 # Mount $HOME at the same path and run as the host user so resolved paths
 # stay host-valid and any emitted files aren't root-owned.
-exec docker run --rm -i \
+exec "$docker_bin" run --rm -i \
   -u "$(id -u):$(id -g)" \
   -v "$HOME:$HOME" \
   -w "$PWD" \
   -e HOME="$HOME" \
-  "${extra[@]}" \
+  ${extra[@]+"${extra[@]}"} \
   "$image" \
   node "$@"
