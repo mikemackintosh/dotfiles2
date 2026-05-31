@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# node — run Node.js in Docker instead of a local install.
+#
+# We deliberately don't install Node on the host. This shim makes `node`
+# transparent so tools that shell out to it (CocoaPods, Metro, RN CLI) just
+# work. The host filesystem is mounted at an IDENTICAL path inside the
+# container, so `require.resolve(...)` and any emitted paths are valid on the
+# host too — which is exactly what CocoaPods' Podfile relies on.
+#
+# Override the image:  NODE_DOCKER_IMAGE=node:22 node ...
+# Extra docker args:   NODE_DOCKER_ARGS=(--network host) node ...
+#
+# See also: the `k` kubectl shim (zsh/kube.zsh) — same containerized approach.
+
+set -euo pipefail
+
+image="${NODE_DOCKER_IMAGE:-node:20}"
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "node(shim): docker not found on PATH — cannot run Node." >&2
+  exit 127
+fi
+
+# Allow callers to inject extra `docker run` args via a NODE_DOCKER_ARGS array.
+extra=()
+if [[ -n "${NODE_DOCKER_ARGS+x}" ]]; then
+  extra=("${NODE_DOCKER_ARGS[@]}")
+fi
+
+# Mount $HOME at the same path and run as the host user so resolved paths
+# stay host-valid and any emitted files aren't root-owned.
+exec docker run --rm -i \
+  -u "$(id -u):$(id -g)" \
+  -v "$HOME:$HOME" \
+  -w "$PWD" \
+  -e HOME="$HOME" \
+  "${extra[@]}" \
+  "$image" \
+  node "$@"
