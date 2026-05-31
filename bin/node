@@ -14,6 +14,18 @@
 
 set -euo pipefail
 
+# Re-entrancy guard: when we're ALREADY inside the container (the outer run
+# sets NODE_SHIM_INNER), exec the container's real Node. Tools like RN's
+# bundle.js shell out to "$NODE_BINARY ... cli.js config" — if that re-ran the
+# Docker shim from inside the container it would try (and fail) to spawn Docker
+# again. Inside the container we just want the real node.
+if [[ -n "${NODE_SHIM_INNER:-}" ]]; then
+  for real in /usr/local/bin/node /usr/bin/node; do
+    [[ -x "$real" ]] && exec "$real" "$@"
+  done
+  exec node "$@"   # last resort via PATH
+fi
+
 image="${NODE_DOCKER_IMAGE:-node:20}"
 
 # Resolve docker even under a minimal PATH (e.g. Xcode build phases, which
@@ -42,6 +54,7 @@ exec "$docker_bin" run --rm -i \
   -v "$HOME:$HOME" \
   -w "$PWD" \
   -e HOME="$HOME" \
+  -e NODE_SHIM_INNER=1 \
   ${extra[@]+"${extra[@]}"} \
   "$image" \
   node "$@"
