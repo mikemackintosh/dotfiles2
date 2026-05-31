@@ -85,6 +85,7 @@ dot_plugins=(
     "go"
     "grep"
     "keybind"
+    "kube"
     "private"
 
     "prompt"
