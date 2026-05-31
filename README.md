@@ -158,6 +158,51 @@ macos-defaults
 
 Requires `dockutil` (in the Brewfile).
 
+## Containerized CLIs (Docker)
+
+Node and kubectl are deliberately **not** installed on the host — they run in
+Docker instead, so the toolchain is reproducible and disposable. Both shims
+forward every argument straight through, so they're drop-in replacements.
+
+### `node` — Node.js in Docker (`bin/node`)
+
+Transparent `node` on `$PATH`. Runs `node` in a container with `$HOME` mounted
+at an **identical path** (as the host user), so `require.resolve(...)` and any
+emitted paths stay valid on the host. That's what lets tools which shell out to
+node — CocoaPods (`pod install`), Metro, the RN CLI — work with no local Node.
+
+```sh
+node -v
+NODE_DOCKER_IMAGE=node:22 node script.js     # override image (default node:20)
+```
+
+| Env var             | Default    | Purpose                       |
+|---------------------|------------|-------------------------------|
+| `NODE_DOCKER_IMAGE` | `node:20`  | container image               |
+| `NODE_DOCKER_ARGS`  | *(array)*  | extra `docker run` args       |
+
+### `k` — kubectl in Docker (`zsh/kube.zsh`)
+
+`k` is a drop-in kubectl: runs the configured image with your kubeconfig mounted
+read-only and forwards all args. `kconfig` prints the effective settings.
+
+```sh
+k get pods
+k -n qondom rollout restart deployment qondom-web
+echo "$manifest" | k apply -f -
+kconfig                                       # show image / kubeconfig / namespace
+```
+
+Override per-machine in `zsh/private.zsh`, or per-repo with a direnv `.envrc`:
+
+| Env var             | Default                          | Purpose                          |
+|---------------------|----------------------------------|----------------------------------|
+| `KUBE_IMAGE`        | `bitnami/kubectl:latest`         | container image                  |
+| `KUBECONFIG_FILE`   | `$HOME/dcs-pro1-kubeconfig.yaml` | kubeconfig, mounted RO           |
+| `KUBE_NAMESPACE`    | *(empty)*                        | default namespace (adds `-n`)    |
+| `KUBE_DOCKER_ARGS`  | *(array)*                        | extra `docker run` args          |
+| `KUBE_KUBECTL_ARGS` | *(array)*                        | extra kubectl args, prepended    |
+
 ## Prompt
 
 Pure-zsh powerline prompt, three palettes. Toggle with `prompt-theme`:

@@ -38,6 +38,7 @@ bin/                                      → user scripts (on $PATH)
   pr-spin                                   spin up a "PR making" session
   notify                                    osascript notification wrapper
   macos-defaults                            apply scrolling / cursor / Dock prefs
+  node                                       Node.js shim → runs in Docker (no local node)
 claude/                                   → Claude Code config
   settings.json                             symlinked into ~/.claude/
   statusline.sh                             symlinked into ~/.claude/
@@ -52,6 +53,7 @@ iterms/                                   → iTerm2 color themes
 tmux/tmux.conf                            → tmux config
 vim/                                      → vimrc + vendored plugins
 zsh/                                      → plugin files sourced by .zshrc
+  kube.zsh                                  `k` — kubectl in Docker (+ `kconfig`)
 ```
 
 ## How to validate a change
