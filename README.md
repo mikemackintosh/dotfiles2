@@ -160,26 +160,47 @@ Requires `dockutil` (in the Brewfile).
 
 ## Containerized CLIs (Docker)
 
-Node and kubectl are deliberately **not** installed on the host — they run in
-Docker instead, so the toolchain is reproducible and disposable. Both shims
-forward every argument straight through, so they're drop-in replacements.
+Whole language toolchains are deliberately **not** installed on the host — they
+run in Docker instead, so the environment is reproducible and disposable. The
+shims forward every argument straight through, so they're drop-in replacements.
 
-### `node` — Node.js in Docker (`bin/node`)
+### Toolchain shims (`bin/docker-shim`)
 
-Transparent `node` on `$PATH`. Runs `node` in a container with `$HOME` mounted
-at an **identical path** (as the host user), so `require.resolve(...)` and any
-emitted paths stay valid on the host. That's what lets tools which shell out to
-node — CocoaPods (`pod install`), Metro, the RN CLI — work with no local Node.
+One multi-call script: each tool name is a symlink to `bin/docker-shim`, which
+dispatches by the name it was invoked as (`$0`) to a per-tool image. The host
+`$HOME` is mounted at an **identical path** and the container runs as the host
+user, so `require.resolve(...)` / emitted paths stay valid on the host (that's
+what lets CocoaPods `pod install`, Metro, the RN CLI work with no local Node)
+and written files aren't root-owned. Tool caches (`~/.npm`, `~/.cache`,
+`~/.gem`, …) live under `$HOME`, so they persist between runs.
 
 ```sh
 node -v
-NODE_DOCKER_IMAGE=node:22 node script.js     # override image (default node:20)
+npm install
+pnpm add -D vitest
+python3 script.py
+pip3 install requests
+ruby -v ; bundle install
+uvx ruff check .
+NODE_DOCKER_IMAGE=node:20 node script.js     # override the image for one tool
+DOCKER_SHIM_ARGS='--network host' npm test    # extra docker run args
 ```
 
-| Env var             | Default    | Purpose                       |
-|---------------------|------------|-------------------------------|
-| `NODE_DOCKER_IMAGE` | `node:20`  | container image               |
-| `NODE_DOCKER_ARGS`  | *(array)*  | extra `docker run` args       |
+| Tool (symlink → `docker-shim`)        | Default image                              |
+|---------------------------------------|--------------------------------------------|
+| `node` `npm` `npx` `yarn` `corepack`  | `node:22`                                  |
+| `pnpm`                                | `node:22` (activated via bundled corepack) |
+| `bun`                                 | `oven/bun:latest`                          |
+| `deno`                                | `denoland/deno:latest`                     |
+| `python3` `python` `pip3` `pip`       | `python:3.12-slim`                         |
+| `uv` `uvx` `poetry`                   | `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` |
+| `ruby` `gem` `bundle` `bundler` `irb` | `ruby:3.3-slim`                            |
+
+Per-tool image override: `<NAME>_DOCKER_IMAGE` (e.g. `PIP3_DOCKER_IMAGE=python:3.12`).
+Extra `docker run` args: `DOCKER_SHIM_ARGS` (all tools) or `<NAME>_DOCKER_ARGS`.
+The `-slim` Python/Ruby images can't compile native extensions — override the
+image for those. Add a tool by extending the `case` in `bin/docker-shim` and the
+symlink loop in `install.sh`.
 
 ### `k` — kubectl in Docker (`zsh/kube.zsh`)
 

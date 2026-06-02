@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# docker-shim — run a language/toolchain binary in Docker instead of installing
+# it on the host. These tools are deliberately NOT on this machine; each name
+# this script is invoked as ($0) maps to a container image + in-container
+# command. Symlink a tool name to this script on $PATH to "install" it:
+#
+#   ln -s docker-shim bin/npm          # then `npm …` runs in Docker
+#
+# install.sh creates the known set (node npm npx yarn pnpm corepack bun deno
+# python3 python pip3 pip uv uvx poetry ruby gem bundle bundler irb).
+#
+# The host $HOME is mounted at an IDENTICAL path and we run as the host user, so
+# resolved/emitted paths stay valid on the host (CocoaPods' Podfile relies on
+# this) and any files written into the project aren't root-owned. Tool caches
+# (~/.npm, ~/.cache, ~/.gem, …) live under $HOME, so they persist between runs.
+#
+# Per-tool image override:  NODE_DOCKER_IMAGE=node:22 node …   (<NAME>_DOCKER_IMAGE)
+# Extra `docker run` args:  DOCKER_SHIM_ARGS='--network host' npm …
+#                           NODE_DOCKER_ARGS='--add-host x:1.2.3.4' node …
+#
+# See also: bin/gh (hard block), zsh/kube.zsh (same approach for kubectl).
+#
+# NOTE: the default python/ruby images are the -slim variants (smaller, and
+# already cached on this machine). pip/gem installs that compile native
+# extensions may need a fuller image — override e.g. PIP3_DOCKER_IMAGE=python:3.12.
+
+set -euo pipefail
+
+self="$(basename "$0")"
+
+# Re-entrancy guard: inside the container we export DOCKER_SHIM_INNER, so if a
+# tool shells back out to this shim by absolute path (e.g. React Native sets
+# $NODE_BINARY to the resolved `node` path, which is this script, then re-invokes
+# it from inside the container) we run the container's REAL binary instead of
+# trying to spawn Docker again.
+if [[ -n "${DOCKER_SHIM_INNER:-}" ]]; then
+  for d in /usr/local/bin /usr/bin /bin /usr/local/sbin /sbin; do
+    [[ -x "$d/$self" ]] && exec "$d/$self" "$@"
+  done
+  exec "$self" "$@"   # last resort via the container's PATH
+fi
+
+# Map the invoked name to a default image and the in-container command. `cmd`'s
+# first element becomes the container --entrypoint (this neutralizes any
+# ENTRYPOINT baked into images like denoland/deno); the rest are prepended to
+# the user's arguments.
+image_default=""
+cmd=()
+case "$self" in
+  node|npm|npx|corepack|yarn) image_default="node:22" ; cmd=("$self") ;;
+  # pnpm isn't preinstalled; activate it via the bundled corepack into a
+  # writable, $HOME-mounted dir (persists, so the download happens once).
+  pnpm)
+    image_default="node:22"
+    cmd=(sh -c '
+      export COREPACK_HOME="${COREPACK_HOME:-$HOME/.cache/corepack}"
+      b="$COREPACK_HOME/bin"; mkdir -p "$b"
+      corepack enable pnpm --install-directory "$b" >/dev/null 2>&1 \
+        || corepack enable --install-directory "$b" >/dev/null 2>&1
+      exec "$b/pnpm" "$@"' pnpm) ;;
+  bun)                  image_default="oven/bun:latest"                        ; cmd=(bun) ;;
+  deno)                 image_default="denoland/deno:latest"                   ; cmd=(deno) ;;
+  python3|python)       image_default="python:3.12-slim"                       ; cmd=(python3) ;;
+  pip3|pip)             image_default="python:3.12-slim"                       ; cmd=(pip3) ;;
+  uv|uvx)               image_default="ghcr.io/astral-sh/uv:python3.12-bookworm-slim" ; cmd=("$self") ;;
+  # poetry has no official image; run it through uv's tool runner.
+  poetry)               image_default="ghcr.io/astral-sh/uv:python3.12-bookworm-slim" ; cmd=(uvx poetry) ;;
+  ruby|gem|irb)         image_default="ruby:3.3-slim"                          ; cmd=("$self") ;;
+  bundle|bundler)       image_default="ruby:3.3-slim"                          ; cmd=(bundle) ;;
+  *)
+    echo "docker-shim: don't know how to run '$self' — add it to the case in $0." >&2
+    exit 127 ;;
+esac
+
+# Resolve docker even under a minimal PATH (e.g. Xcode build phases, which often
+# omit /usr/local/bin where Docker Desktop's CLI symlink lives).
+docker_bin="$(command -v docker 2>/dev/null || true)"
+if [[ -z "$docker_bin" ]]; then
+  for c in /usr/local/bin/docker /opt/homebrew/bin/docker "$HOME/.docker/bin/docker"; do
+    [[ -x "$c" ]] && { docker_bin="$c"; break; }
+  done
+fi
+if [[ -z "$docker_bin" ]]; then
+  echo "$self(shim): docker not found on PATH or in known locations — cannot run." >&2
+  exit 127
+fi
+
+# Per-tool image override: <NAME>_DOCKER_IMAGE (e.g. NODE_DOCKER_IMAGE, PIP3_DOCKER_IMAGE).
+name_uc="$(printf '%s' "$self" | tr 'a-z-' 'A-Z_')"
+img_var="${name_uc}_DOCKER_IMAGE"
+image="${!img_var:-$image_default}"
+
+# Extra `docker run` args, word-split (env vars can't carry bash arrays across a
+# process boundary). DOCKER_SHIM_ARGS applies to every tool; <NAME>_DOCKER_ARGS
+# is per-tool. Both are optional.
+extra=()
+[[ -n "${DOCKER_SHIM_ARGS:-}" ]] && extra+=($DOCKER_SHIM_ARGS)
+args_var="${name_uc}_DOCKER_ARGS"
+args_val="${!args_var:-}"
+[[ -n "$args_val" ]] && extra+=($args_val)
+
+# Mount $HOME at the same path. If $PWD is outside $HOME (e.g. /tmp), mount it
+# too so the working directory exists inside the container.
+run=(run --rm -i)
+[[ -t 0 && -t 1 ]] && run+=(-t)               # a TTY when interactive (REPLs)
+run+=(-u "$(id -u):$(id -g)" -v "$HOME:$HOME" -e HOME="$HOME")
+case "$PWD" in
+  "$HOME"|"$HOME"/*) : ;;
+  *) run+=(-v "$PWD:$PWD") ;;
+esac
+run+=(-w "$PWD" -e DOCKER_SHIM_INNER=1 --entrypoint "${cmd[0]}")
+(( ${#extra[@]} )) && run+=("${extra[@]}")
+run+=("$image")
+(( ${#cmd[@]} > 1 )) && run+=("${cmd[@]:1}")
+
+exec "$docker_bin" "${run[@]}" "$@"

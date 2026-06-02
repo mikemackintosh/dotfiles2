@@ -38,7 +38,8 @@ bin/                                      → user scripts (on $PATH)
   pr-spin                                   spin up a "PR making" session
   notify                                    osascript notification wrapper
   macos-defaults                            apply scrolling / cursor / Dock prefs
-  node                                       Node.js shim → runs in Docker (no local node)
+  docker-shim                               multi-call Docker shim; tool names
+                                            (node/npm/pnpm/python3/ruby/…) symlink to it
 claude/                                   → Claude Code config
   settings.json                             symlinked into ~/.claude/
   statusline.sh                             symlinked into ~/.claude/
