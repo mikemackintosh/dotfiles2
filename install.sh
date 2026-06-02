@@ -149,8 +149,17 @@ chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
          "$DOTFILES/bin/macos-defaults" "$DOTFILES/bin/claude-on" \
          "$DOTFILES/bin/battery-info" "$DOTFILES/bin/weather" \
          "$DOTFILES/bin/now-playing" "$DOTFILES/bin/airpods-battery" \
-         "$DOTFILES/bin/tmux-status-right" \
+         "$DOTFILES/bin/tmux-status-right" "$DOTFILES/bin/docker-shim" \
          "$DOTFILES/githooks/pre-push" "$DOTFILES/githooks/pre-commit"
+
+# Containerized toolchain shims: each name is a symlink to bin/docker-shim,
+# which dispatches by $0 to a Docker image. These languages/CLIs are kept OFF
+# the host on purpose. Self-heal the links in case any went missing.
+for t in node npm npx yarn pnpm corepack bun deno \
+         python3 python pip3 pip uv uvx poetry \
+         ruby gem bundle bundler irb; do
+    ln -sf docker-shim "$DOTFILES/bin/$t"
+done
 
 # Install Homebrew if missing, then materialize the Brewfile.
 if ! command -v brew >/dev/null 2>&1; then
