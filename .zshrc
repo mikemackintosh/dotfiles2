@@ -130,10 +130,10 @@ printf '\n%.0s' {1..$LINES}
 source <(fzf --zsh)
 
 # zoxide: smarter cd — `z <substring>` jumps to a frecent dir
-eval "$(zoxide init zsh)"
+# eval "$(zoxide init zsh)"
 
 # direnv: per-directory .envrc autoloading
-eval "$(direnv hook zsh)"
+# eval "$(direnv hook zsh)"
 
 # zsh-autosuggestions: fish-style greyed suggestion from history
 source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
@@ -161,3 +161,9 @@ bindkey ' ' _space_accept_or_self
 
 # zsh-syntax-highlighting: MUST be sourced last (hooks into ZLE)
 source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# eval "$(mise activate zsh)"
+
+# Global aliases for chaining commands: `command1 and command2`, `command1 or command2`
+alias -g and='&&'
+alias -g or='||'
