@@ -145,11 +145,13 @@ fi
 chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
          "$DOTFILES/bin/memories" "$DOTFILES/bin/tmux-sessionizer" \
          "$DOTFILES/bin/notify" "$DOTFILES/bin/git-review" \
-         "$DOTFILES/bin/pr-spin" "$DOTFILES/bin/gh" \
+         "$DOTFILES/bin/git-feature" "$DOTFILES/bin/gh" \
          "$DOTFILES/bin/macos-defaults" "$DOTFILES/bin/claude-on" \
          "$DOTFILES/bin/battery-info" "$DOTFILES/bin/weather" \
          "$DOTFILES/bin/now-playing" "$DOTFILES/bin/airpods-battery" \
          "$DOTFILES/bin/tmux-status-right" "$DOTFILES/bin/docker-shim" \
+         "$DOTFILES/bin/claude-in-docker" "$DOTFILES/bin/gen-compose-override" \
+         "$DOTFILES/docker/claude-review/cc-status-stub" \
          "$DOTFILES/githooks/pre-push" "$DOTFILES/githooks/pre-commit"
 
 # Containerized toolchain shims: each name is a symlink to bin/docker-shim,

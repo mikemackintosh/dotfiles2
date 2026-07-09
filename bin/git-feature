@@ -1,0 +1,617 @@
+#!/usr/bin/env bash
+# git-feature — describe an issue or feature, get a fresh branch + a
+# tmux session with Claude running inside the claude-review container.
+# Symmetric to `git-review`: `git feature "…"` mirrors `git review <pr>`.
+#
+# Usage:
+#   git feature "<description>"                     # cwd repo, defaults
+#   git feature <repo-path> "<description>"         # explicit local path
+#   git feature <owner>/<repo> "<description>"      # resolves under ~/go/src/…
+#   git feature <github-url> "<description>"        # ditto
+#
+# Flags (any position):
+#   --no-docker              Run claude on the host (skip the container).
+#   --no-compose-override    Skip per-branch docker-compose port randomization.
+#   --interactive            Ask before pushing/opening PR (default).
+#   --no-interactive         Yolo mode. Only sane inside the container.
+#   --model <id>             Model id passed to claude (e.g. claude-opus-4-8).
+#   --allow-dirty            Don't refuse if the checkout has uncommitted work.
+#
+# What it does:
+#   1. Resolve the repo spec:
+#      - Local path or cwd → work in-place (dirty check enforced).
+#      - URL / owner/repo → clone fresh into
+#        ~/agent-work/<owner>/<repo>-<random> so each session is
+#        isolated. If a canonical local checkout exists it's used as
+#        --reference for a fast, hardlinked clone; remote still points
+#        at github so pushes work.
+#   2. Refuse if in-place mode and the tree is dirty (--allow-dirty
+#      to bypass). Skipped for agent-work clones.
+#   3. Ask Claude Haiku for a *meaningful* branch slug + tmux session
+#      name in ONE call. Falls back to naive slugify on failure.
+#   4. Fetch origin/main, branch off it (feat/<slug>-<ts>).
+#   5. Generate a docker-compose override in the workdir (unless
+#      --no-compose-override) so services get randomized host ports.
+#   6. Open a tmux session with that name; inside its first pane launch
+#      claude-in-docker (or plain claude with --no-docker) with the
+#      make-pr prompt as the initial message.
+
+set -euo pipefail
+
+PROMPT_FILE="$HOME/.dotfiles/claude/prompts/make-pr.md"
+[[ -f $PROMPT_FILE ]] || { echo "missing prompt: $PROMPT_FILE" >&2; exit 1; }
+command -v claude >/dev/null 2>&1 || { echo "claude CLI not found" >&2; exit 1; }
+command -v tmux   >/dev/null 2>&1 || { echo "tmux not found" >&2; exit 1; }
+
+# ANSI styling — off when stdout isn't a TTY or NO_COLOR is set.
+if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
+    _B=$'\033[1m'; _D=$'\033[2m'; _I=$'\033[3m'
+    _C=$'\033[36m'; _Y=$'\033[33m'; _M=$'\033[35m'; _G=$'\033[32m'
+    _R=$'\033[0m'
+else
+    _B=''; _D=''; _I=''; _C=''; _Y=''; _M=''; _G=''; _R=''
+fi
+
+usage() {
+    cat <<EOF
+${_B}git-feature${_R} ${_D}— new feature or bug-fix branch, containerized${_R}
+
+  ${_D}Symmetric to git-review. Creates a fresh branch off origin/main,${_R}
+  ${_D}asks Claude Haiku for a compact tmux session name, and launches${_R}
+  ${_D}Claude inside the claude-review:local container with${_R}
+  ${_D}claude/prompts/make-pr.md as the initial message.${_R}
+
+${_Y}USAGE${_R}
+  ${_C}git feature${_R} ${_M}"<description>"${_R} ${_D}[flags]${_R}
+  ${_C}git feature${_R} ${_M}<repo-path>${_R} ${_M}"<description>"${_R} ${_D}[flags]${_R}
+  ${_C}git feature${_R} ${_M}<owner>/<repo>${_R} ${_M}"<description>"${_R} ${_D}[flags]${_R}
+  ${_C}git feature${_R} ${_M}<github-url>${_R} ${_M}"<description>"${_R} ${_D}[flags]${_R}
+
+${_D}URL / owner/repo → fresh clone into ~/agent-work/<owner>/<repo>-<random>${_R}
+${_D}so each run is isolated. If a canonical checkout exists locally${_R}
+${_D}it's used as --reference for a fast hardlinked clone.${_R}
+${_D}Local path / cwd → in-place, dirty check enforced.${_R}
+
+${_Y}FLAGS${_R}
+  ${_B}--no-docker${_R}               ${_D}Run Claude on the host (skip the container).${_R}
+  ${_B}--no-compose-override${_R}     ${_D}Skip per-branch docker-compose port${_R}
+                            ${_D}randomization.${_R}
+  ${_B}--interactive${_R}             ${_D}Prompt-level: ask before pushing/opening PR (default).${_R}
+  ${_B}--no-interactive${_R}          ${_D}Prompt-level: skip the prompt-side confirmations.${_R}
+  ${_B}--yolo${_R}                    ${_D}Add --dangerously-skip-permissions to claude.${_R}
+                            ${_D}Off by default; enable only when the container${_R}
+                            ${_D}sandbox is your safety net.${_R}
+  ${_B}--model${_R} ${_M}<id>${_R}              ${_D}Model id, e.g. claude-opus-4-8.${_R}
+  ${_B}--allow-dirty${_R}             ${_D}Don't refuse if working tree has uncommitted work.${_R}
+  ${_B}-h${_R}, ${_B}--help${_R}                ${_D}Show this help.${_R}
+
+${_Y}EXAMPLES${_R}
+  ${_G}\$${_R} ${_C}git feature${_R} ${_M}"validate email length before save"${_R}
+  ${_G}\$${_R} ${_C}git feature${_R} owner/repo ${_M}"remove unused redis client"${_R}
+  ${_G}\$${_R} ${_C}git feature${_R} https://github.com/owner/repo ${_M}"..."${_R}
+  ${_G}\$${_R} ${_C}git feature${_R} ${_M}"add pagination"${_R} ${_B}--model${_R} ${_M}claude-opus-4-8${_R}
+  ${_G}\$${_R} ${_C}git feature${_R} ${_M}"quick typo fix"${_R} ${_B}--no-docker${_R}
+
+${_Y}NOTES${_R}
+  ${_D}bin/pr-spin is a back-compat symlink to bin/git-feature.${_R}
+  ${_D}Run many times against the same repo — each call creates a fresh${_R}
+  ${_D}branch off origin/main. No worktrees.${_R}
+
+${_Y}DOCS${_R}
+  ${_I}~/.dotfiles/docs/git-feature.md${_R}
+EOF
+}
+
+use_docker=1
+gen_override=1
+interactive=1
+allow_dirty=0
+yolo=0
+model=""
+positional=()
+
+while (( $# )); do
+    case $1 in
+        --no-docker)           use_docker=0;         shift ;;
+        --no-compose-override) gen_override=0;       shift ;;
+        --interactive)         interactive=1;        shift ;;
+        --no-interactive)      interactive=0;        shift ;;
+        --allow-dirty)         allow_dirty=1;        shift ;;
+        --yolo|--dangerously-skip-permissions)
+                               yolo=1;               shift ;;
+        --model)               model=$2;             shift 2 ;;
+        --model=*)             model=${1#--model=};  shift ;;
+        -h|--help)             usage; exit 0 ;;
+        --) shift; positional+=("$@"); break ;;
+        -*)  echo "git-feature: unknown flag $1" >&2; exit 2 ;;
+        *)   positional+=("$1"); shift ;;
+    esac
+done
+
+# parse_owner_repo <spec> → sets globals _spec_owner / _spec_name (empty
+# on no match). Accepts full github URL or bare owner/repo shorthand.
+parse_owner_repo() {
+    _spec_owner=""; _spec_name=""
+    local spec=$1
+    if [[ $spec =~ ^https?://github\.com/([^/]+)/([^/#?.]+)(\.git)?/?$ ]]; then
+        _spec_owner=${BASH_REMATCH[1]}
+        _spec_name=${BASH_REMATCH[2]}
+    elif [[ $spec =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
+        _spec_owner=${BASH_REMATCH[1]}
+        _spec_name=${BASH_REMATCH[2]}
+    fi
+}
+
+# find_local_reference <owner> <name> → prints local canonical checkout
+# path if one exists, or nothing. Used as `--reference` for a fast
+# hardlinked clone.
+find_local_reference() {
+    local owner=$1 name=$2 c
+    for c in \
+        "$HOME/go/src/github.com/$owner/$name" \
+        "$HOME/Projects/$name" \
+        "$HOME/src/github.com/$owner/$name" \
+        "$HOME/code/$owner/$name" \
+        "$HOME/repos/$name"; do
+        if [[ -d $c/.git ]]; then
+            printf '%s' "$c"
+            return
+        fi
+    done
+}
+
+# clone_to_agent_work <owner> <name> → prints the path of a fresh
+# checkout under ~/agent-work/<owner>/<name>-<random>. If a canonical
+# local checkout exists it's used as --reference so most objects come
+# from local disk instead of the network. Remote always points at
+# github so `git push` works normally.
+#
+# Auth strategy: prefer SSH via 1Password's agent when available.
+# The macOS Keychain agent (default $SSH_AUTH_SOCK) has been observed
+# to hang / fail with "communication with agent failed" — 1P's agent
+# is what actually holds the user's github keys anyway. Fall back to
+# HTTPS if 1P isn't running.
+clone_to_agent_work() {
+    local owner=$1 name=$2
+    local parent="$HOME/agent-work/$owner"
+    mkdir -p "$parent"
+    local target
+    target=$(mktemp -d "$parent/${name}-XXXXXX")
+    local ref
+    ref=$(find_local_reference "$owner" "$name")
+
+    local one_p_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+    local clone_url how
+    if [[ -S $one_p_sock ]]; then
+        clone_url="git@github.com:$owner/$name.git"
+        how="SSH via 1Password agent"
+        # Scoped to this function's subshell (called via command
+        # substitution) — doesn't leak to the outer environment.
+        export SSH_AUTH_SOCK=$one_p_sock
+    else
+        clone_url="https://github.com/$owner/$name.git"
+        how="HTTPS"
+    fi
+
+    if [[ -n $ref ]]; then
+        echo "→ Cloning $owner/$name → $target ($how; reference: $ref)" >&2
+        # --dissociate copies borrowed objects into the new repo and
+        # removes the .git/objects/info/alternates file. Without it,
+        # git ops inside the container fail because the reference
+        # path ($HOME/go/src/…) isn't mounted in the container.
+        if ! git clone --quiet --reference-if-able "$ref" --dissociate "$clone_url" "$target"; then
+            rm -rf "$target"
+            return 1
+        fi
+    else
+        echo "→ Cloning $owner/$name → $target ($how; depth=100)" >&2
+        if ! git clone --quiet --depth 100 "$clone_url" "$target"; then
+            rm -rf "$target"
+            return 1
+        fi
+    fi
+    printf '%s' "$target"
+}
+
+# Positional resolution:
+#   0 → error
+#   1 → cwd + description         (in-place mode, dirty check applies)
+#   2 → spec + description
+#         spec is a local directory → in-place mode, dirty check applies
+#         spec is URL / owner-repo → clone into ~/agent-work/, dirty check skipped
+in_place=1
+case ${#positional[@]} in
+    1) repo=$(pwd); desc=${positional[0]} ;;
+    2)
+        spec=${positional[0]}
+        desc=${positional[1]}
+        if [[ -d $spec ]]; then
+            repo=$(cd "$spec" && pwd)
+        else
+            parse_owner_repo "$spec"
+            if [[ -z $_spec_owner || -z $_spec_name ]]; then
+                echo "git-feature: '$spec' isn't a local dir, a URL, or owner/repo shorthand" >&2
+                exit 2
+            fi
+            repo=$(clone_to_agent_work "$_spec_owner" "$_spec_name") || {
+                echo "git-feature: clone failed" >&2
+                exit 1
+            }
+            in_place=0
+        fi
+        ;;
+    *) echo 'usage: git-feature [<repo-path>|<owner>/<repo>|<url>] "<description>"' >&2; exit 2 ;;
+esac
+
+[[ -d $repo/.git ]] || { echo "not a git repo: $repo" >&2; exit 1; }
+
+cd "$repo"
+
+# Dirty-tree check only applies in in-place mode. Agent-work clones
+# are always fresh.
+if (( in_place && ! allow_dirty )) && [[ -n $(git status --porcelain 2>/dev/null) ]]; then
+    cat >&2 <<EOF
+git-feature: '$repo' has uncommitted changes.
+
+    Commit, stash, or restore before spinning up a new feature branch.
+    Or pass --allow-dirty if you know what you're doing.
+
+Current status:
+$(git -c color.status=always status --short)
+EOF
+    exit 1
+fi
+
+# Ask Claude Haiku for a good branch slug AND a tmux session name in
+# ONE round-trip. Falls back to naive slugify if the CLI errors or the
+# response can't be parsed. Raw output is saved to a debug log so you
+# can see what Haiku said when the fallback fires unexpectedly.
+HAIKU_LOG="${TMPDIR:-/tmp}/git-feature-haiku-$$.log"
+gen_slug_and_session() {
+    local out="" branch_slug="" session_name=""
+
+    if command -v claude >/dev/null 2>&1; then
+        out=$(claude -p --model claude-haiku-4-5 \
+"For the task below, reply with EXACTLY two lines and nothing else. No quotes, no explanation, no markdown, no leading/trailing whitespace. Kebab-case only ([a-z0-9-]).
+
+BRANCH: <3-6 words, meaningful — captures WHAT the change does, not the surrounding context>
+SESSION: <2-4 words, shorter, memorable — for looking up in 'tmux ls'>
+
+Task: $desc" 2>"$HAIKU_LOG") || true
+        printf '=== stdout ===\n%s\n=== end ===\n' "$out" >>"$HAIKU_LOG"
+
+        # Use grep+sed instead of awk: BSD awk (default on macOS) lacks
+        # gawk's IGNORECASE, so a case-insensitive match needs grep -i.
+        # The `|| true` on each pipeline is CRITICAL — under set -euo
+        # pipefail, a no-match from grep would otherwise kill the whole
+        # script silently right after "Asking Haiku…".
+        branch_slug=$( { printf '%s\n' "$out" \
+            | grep -im1 '^[[:space:]]*branch[[:space:]]*:' \
+            | sed -E 's/^[[:space:]]*[Bb][Rr][Aa][Nn][Cc][Hh][[:space:]]*:[[:space:]]*//' \
+            | LC_ALL=C sed -E 's/[^a-zA-Z0-9-]//g' \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/-+/-/g; s/^-+//; s/-+$//' \
+            | cut -c1-48; } 2>/dev/null || true )
+        session_name=$( { printf '%s\n' "$out" \
+            | grep -im1 '^[[:space:]]*session[[:space:]]*:' \
+            | sed -E 's/^[[:space:]]*[Ss][Ee][Ss][Ss][Ii][Oo][Nn][[:space:]]*:[[:space:]]*//' \
+            | LC_ALL=C sed -E 's/[^a-zA-Z0-9-]//g' \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/-+/-/g; s/^-+//; s/-+$//' \
+            | cut -c1-40; } 2>/dev/null || true )
+
+        if [[ -z $branch_slug || -z $session_name ]]; then
+            echo "→ Haiku response didn't parse — using naive slug. See $HAIKU_LOG for what Haiku actually returned." >&2
+        fi
+    fi
+
+    if [[ -z $branch_slug ]]; then
+        branch_slug=$(printf '%s' "$desc" \
+            | tr '[:upper:]' '[:lower:]' \
+            | LC_ALL=C sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
+            | cut -c1-40 \
+            | sed -E 's/-+$//')
+        [[ -z $branch_slug ]] && branch_slug="task"
+    fi
+    # Fallback session: strip mktemp's -XXXXXX from the basename first
+    # so we don't get 'orbital-9idWle-…'. Six-char alnum tail assumed
+    # (matches our own agent-work naming, harmless elsewhere).
+    if [[ -z $session_name ]]; then
+        local clean_base
+        clean_base=$(basename "$repo" \
+            | LC_ALL=C sed -E 's/-[A-Za-z0-9]{6}$//' \
+            | tr '.:' '__')
+        session_name="${clean_base}-${branch_slug:0:12}"
+    fi
+
+    printf '%s\n%s\n' "$branch_slug" "$session_name"
+}
+
+echo "→ Asking Haiku for a branch slug + session name"
+{ IFS= read -r slug; IFS= read -r session; } < <(gen_slug_and_session)
+branch="feat/${slug}-$(date +%s)"
+echo "→ Branch:  $branch"
+
+session=$(printf '%s' "$session" | tr '.:' '__')
+if tmux has-session -t "$session" 2>/dev/null; then
+    session="${session}-${slug:0:8}"
+fi
+echo "→ Session: $session"
+
+echo "→ Fetching origin/main"
+git fetch --quiet origin main
+echo "→ Branching $branch off origin/main"
+git checkout -q -b "$branch" origin/main
+
+if (( gen_override )); then
+    if [[ -x "$HOME/.dotfiles/bin/gen-compose-override" ]]; then
+        echo "→ Generating compose override (randomized ports)"
+        "$HOME/.dotfiles/bin/gen-compose-override" "$repo" "${branch##*-}" || true
+    fi
+fi
+
+# Pre-seed the trust dialog + MCP approval in ~/.claude.json for this
+# workdir so Claude Code doesn't prompt on startup. Each agent-work
+# clone is a NEW absolute path, so per-project state doesn't carry
+# across runs unless we write it here.
+if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
+    # Collect any MCP server names declared in the workdir's .mcp.json
+    # so those get auto-enabled too (e.g. `playwright` in the orbital repo).
+    mcp_servers_json='[]'
+    if [[ -f $repo/.mcp.json ]]; then
+        mcp_servers_json=$(jq -c '(.mcpServers // {}) | keys' "$repo/.mcp.json" 2>/dev/null || echo '[]')
+    fi
+
+    echo "→ Pre-approving trust + MCP for $repo"
+    tmp_claude=$(mktemp -t claude-json.XXXXXX)
+    if jq --arg dir "$repo" \
+          --argjson servers "$mcp_servers_json" \
+          '.projects[$dir] = ((.projects[$dir] // {}) + {
+              hasTrustDialogAccepted: true,
+              hasClaudeMdExternalIncludesApproved: true,
+              hasClaudeMdExternalIncludesWarningShown: true,
+              projectOnboardingSeenCount: 1,
+              enabledMcpjsonServers: (((.projects[$dir].enabledMcpjsonServers // []) + $servers) | unique),
+              allowedTools: (.projects[$dir].allowedTools // []),
+              mcpContextUris: (.projects[$dir].mcpContextUris // []),
+              disabledMcpjsonServers: (.projects[$dir].disabledMcpjsonServers // []),
+              mcpServers: (.projects[$dir].mcpServers // {})
+          })' "$HOME/.claude.json" > "$tmp_claude" \
+       && [[ -s $tmp_claude ]]; then
+        mv "$tmp_claude" "$HOME/.claude.json"
+    else
+        echo "  (jq merge failed — trust prompt will appear on first run)" >&2
+        rm -f "$tmp_claude"
+    fi
+fi
+
+prompt_path=$(mktemp -t git-feature-prompt.XXXXXX)
+# Task comes FIRST so it's above the fold when claude renders. Workflow
+# instructions from make-pr.md follow. The final block re-emphasizes
+# the task so it's the last thing in claude's context.
+{
+    echo "# Task"
+    echo
+    echo "$desc"
+    echo
+    echo "## Environment"
+    echo
+    echo "- Branch '$branch' is already checked out off origin/main."
+    echo "- WORKDIR=$repo"
+    echo "- INTERACTIVE=$interactive"
+    echo
+    echo "---"
+    echo
+    echo "# Workflow instructions"
+    echo
+    cat "$PROMPT_FILE"
+    echo
+    echo "---"
+    echo
+    echo "# Reminder of the task"
+    echo
+    echo "$desc"
+} > "$prompt_path"
+
+export CLAUDE_REVIEW_INTERACTIVE=$interactive
+export CLAUDE_REVIEW_WORKDIR=$repo
+
+# Give the running container a predictable, UNIQUE-per-invocation
+# name so pane 3 can `docker exec` into it. Using $(basename "$repo")
+# ensures uniqueness even when the tmux session name is stable
+# across reruns (Haiku picks the same session name for the same task
+# description → same container name → docker naming conflict on rerun).
+# basename gives e.g. `orbital-kBNGRK` for an agent-work clone.
+container_name="claude-review-$(basename "$repo")"
+export CLAUDE_REVIEW_CONTAINER_NAME=$container_name
+
+# Claude is launched WITHOUT the prompt on the command line. Claude
+# Code v2's positional-prompt behavior isn't reliable for our use case
+# — it sometimes goes into one-shot mode and exits, or gets eaten by
+# variadic flags. Instead we paste the prompt into pane 0 with
+# `tmux load-buffer` + `paste-buffer` once the container is up and
+# claude's UI has rendered (see the "Inject prompt" block below).
+if (( use_docker )) && [[ -x "$HOME/.dotfiles/bin/claude-in-docker" ]]; then
+    inner_cmd="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$repo'"
+    [[ -n $model ]] && inner_cmd+=" --model '$model'"
+    (( yolo )) && inner_cmd+=" --yolo"
+else
+    inner_cmd="claude"
+    [[ -n $model ]] && inner_cmd+=" --model '$model'"
+    (( yolo )) && inner_cmd+=" --dangerously-skip-permissions"
+fi
+
+# Wrap so:
+#   - the pane stays open after claude exits (drops into \$SHELL so you
+#     can see failure output, cd around, re-run, etc.),
+#   - exit status is printed for quick diagnosis,
+#   - terminal mouse-tracking modes are RESET when claude exits (claude's
+#     ink TUI enables SGR-1006 mouse tracking but doesn't always turn it
+#     off on exit; without the reset, scroll-wheel events leak into the
+#     fallback shell as raw '\e[<0;100;25M' escape sequences),
+#   - when the user Ctrl-D's the fallback shell in this pane, the ENTIRE
+#     tmux session is killed (compose-logs pane + container-shell pane
+#     die too). One keypress teardown instead of Ctrl-D on all three.
+#   - Detach without killing: standard tmux prefix + d.
+# Prompt file cleanup is handled by the background injector below.
+launch_cmd=$(cat <<EOSH
+{ $inner_cmd; }
+_ec=\$?
+# Disable all mouse-reporting modes + bracketed paste that the child
+# app may have left on.
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?2004l'
+printf '\n\033[2m[claude exited with status %s — pane kept open. Ctrl-D here kills the whole session (all 3 panes). Prefix+d to detach without killing.]\033[0m\n' "\$_ec"
+# Note: NO 'exec' here — we want control back after \$SHELL exits so
+# we can tear down the session.
+\${SHELL:-/bin/zsh} -l
+tmux kill-session -t '$session' 2>/dev/null || true
+EOSH
+)
+
+# Pane 2 (top-right): compose logs. Retries every 3s so it starts
+# showing services as soon as Claude/you brings them up.
+if [[ -f $repo/.env.review ]]; then
+    compose_cmd=$(cat <<EOSH
+cd '$repo'
+while :; do
+    if docker compose --env-file .env.review ps --services --status running 2>/dev/null | grep -q .; then
+        docker compose --env-file .env.review logs -f --tail 200 2>&1 || true
+    else
+        printf '\033[2m[waiting for compose services (project=review-pr-${branch##*-}) — retrying in 3s]\033[0m\n'
+        sleep 3
+    fi
+done
+EOSH
+)
+else
+    compose_cmd="printf '\033[2m[no docker-compose.override.yml in this workdir — nothing to tail]\033[0m\n'; exec \${SHELL:-/bin/zsh} -l"
+fi
+
+# Pane 3 (bottom-right): shell inside the claude container once it's
+# running. Waits for the container to appear (up to ~60s), then execs
+# in. If claude runs on the host (--no-docker), degrade to a shell in
+# the workdir.
+if (( use_docker )); then
+    container_shell_cmd=$(cat <<EOSH
+cd '$repo'
+printf '\033[2mwaiting for container "%s" to start (up to 60s)...\033[0m\n' '$container_name'
+for _ in \$(seq 1 60); do
+    if docker inspect -f '{{.State.Running}}' '$container_name' 2>/dev/null | grep -q true; then
+        break
+    fi
+    sleep 1
+done
+if docker inspect -f '{{.State.Running}}' '$container_name' 2>/dev/null | grep -q true; then
+    docker exec -it '$container_name' bash 2>/dev/null || docker exec -it '$container_name' sh
+    printf '\n\033[2m[container shell exited — pane kept open]\033[0m\n'
+else
+    printf '\033[2m[container "%s" never came up; falling back to host shell in workdir]\033[0m\n' '$container_name'
+fi
+exec \${SHELL:-/bin/zsh} -l
+EOSH
+)
+else
+    container_shell_cmd="cd '$repo' && printf '\033[2m[--no-docker: no container to exec into; host shell in workdir]\033[0m\n' && exec \${SHELL:-/bin/zsh} -l"
+fi
+
+# Paper-trail before we hand off.
+cat <<EOF
+→ tmux session:    $session
+→ Container name:  $container_name
+→ Reattach:        tmux attach -t $session
+→ Peek read-only:  tmux attach -r -t $session
+→ Haiku debug log: $HAIKU_LOG
+EOF
+
+# Build the three-pane session. We use pane IDs (`%N`) rather than
+# `session:window.pane` targets — the latter breaks if the user has
+# `base-index 1` set in their tmux.conf (window 0 doesn't exist there).
+# `-P -F '#{pane_id}'` makes each command print the id of the pane it
+# just created, which we capture.
+main_pane=$(tmux new-session -d -s "$session" -c "$repo" \
+    -P -F '#{pane_id}' "$launch_cmd")
+
+# Enable mouse mode for THIS session only. Without it, terminals that
+# send SGR-1006 mouse reports (iTerm2, Ghostty, etc. by default) leak
+# raw escape sequences like `0;100;25M...` into the active pane on
+# scroll. `set-option -t <session>` scopes to just our session and
+# doesn't touch the user's global tmux config.
+tmux set-option -t "$session" mouse on 2>/dev/null || true
+
+# Right column: split off the main pane horizontally, taking 40% width.
+compose_pane=$(tmux split-window -h -t "$main_pane" -c "$repo" -l 40% \
+    -P -F '#{pane_id}' "$compose_cmd")
+
+# Bottom-right: split the right-column pane vertically, bottom half.
+shell_pane=$(tmux split-window -v -t "$compose_pane" -c "$repo" -l 50% \
+    -P -F '#{pane_id}' "$container_shell_cmd")
+
+# Pane titles, if the tmux version supports pane-border-status.
+tmux set-window-option -t "$main_pane" pane-border-status top 2>/dev/null || true
+tmux select-pane -t "$main_pane"    -T "claude"          2>/dev/null || true
+tmux select-pane -t "$compose_pane" -T "compose logs"    2>/dev/null || true
+tmux select-pane -t "$shell_pane"   -T "container shell" 2>/dev/null || true
+
+# Focus back on the claude pane before handing over.
+tmux select-pane -t "$main_pane"
+
+# Inject the prompt into pane 0 (claude) once its UI is ready.
+# Use `tmux run-shell -b` (server-side background job) rather than a
+# `& disown` subshell. The subshell approach dies unreliably when we
+# `exec tmux attach` below (the parent bash is replaced and the child
+# loses its footing); `run-shell -b` runs inside the tmux server and
+# survives regardless of what the client does.
+buf_name="gf-$$-$(printf '%s' "$session" | tr -c '[:alnum:]' _)"
+injector_log="${TMPDIR:-/tmp}/git-feature-injector-$$.log"
+
+# Write the injector as its own script so run-shell can invoke it
+# without quoting nightmares. Cleans itself up when done.
+injector_path=$(mktemp -t git-feature-injector.XXXXXX)
+chmod +x "$injector_path"
+cat > "$injector_path" <<INJECTOR_EOF
+#!/usr/bin/env bash
+exec >>"$injector_log" 2>&1
+echo "=== injector started at \$(date) ==="
+if [[ $use_docker -eq 1 ]]; then
+    for i in \$(seq 1 60); do
+        if docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null | grep -q true; then
+            echo "container running after \${i}s"
+            break
+        fi
+        sleep 1
+    done
+    sleep 3
+else
+    sleep 2
+fi
+
+if [[ ! -f "$prompt_path" ]]; then
+    echo "prompt file missing: $prompt_path"
+    exit 0
+fi
+if ! tmux has-session -t "$session" 2>/dev/null; then
+    echo "tmux session '$session' no longer exists"
+    exit 0
+fi
+
+echo "loading buffer + pasting to pane $main_pane"
+tmux load-buffer -b "$buf_name" "$prompt_path"
+# -p uses bracketed-paste escape sequences so claude's TUI treats the
+# whole content as one atomic paste (newlines stay literal, not
+# submit-per-line). -d deletes the buffer after paste.
+tmux paste-buffer -p -b "$buf_name" -t "$main_pane" -d
+# Longer settle before Enter — big pastes need a moment to fully
+# render in claude's input box before submit.
+sleep 2
+tmux send-keys -t "$main_pane" Enter
+echo "=== injector done ==="
+rm -f "$prompt_path" "\$0"
+INJECTOR_EOF
+
+tmux run-shell -b "$injector_path"
+
+if [[ -z "${TMUX:-}" ]]; then
+    exec tmux attach -t "$session"
+else
+    exec tmux switch-client -t "$session"
+fi

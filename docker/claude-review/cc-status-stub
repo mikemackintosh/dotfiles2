@@ -1,0 +1,12 @@
+#!/bin/sh
+# No-op stub for the iTerm2 cc-status hook.
+# The real binary is a macOS Mach-O executable at
+# /Applications/iTerm.app/Contents/Resources/utilities/cc-status,
+# symlinked from ~/.config/iterm2/cc-status. It can't run in a
+# Linux container, and Claude Code fires it via hooks in
+# ~/.claude/settings.json every tool call.
+#
+# bin/claude-in-docker bind-mounts this file over the expected path
+# inside the container so those hooks succeed silently and Claude's
+# pane isn't spammed with "cc-status: not found" errors.
+exit 0

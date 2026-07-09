@@ -30,7 +30,9 @@ Verify everything afterwards:
 .zshrc, .zprofile, .hushlogin, .gitconfig   symlinked into $HOME by install.sh
 Brewfile                                    brew bundle dependencies
 bin/                                        user scripts (added to $PATH)
-claude/                                     Claude Code settings + statusline
+claude/                                     Claude Code settings + statusline + prompts
+docker/                                     Dockerfiles built by our tools (claude-review)
+docs/                                       Deep-dive docs for individual tools
 githooks/                                   global git hooks (core.hooksPath)
 gitconfig.private.example                   template for ~/.private/gitconfig
 install.sh                                  idempotent symlink installer
@@ -142,6 +144,56 @@ plus `~/.dotfiles`. Override per-machine via `~/.dotfiles/.tmux-sessionizer-path
 ~/.dotfiles
 ~/personal/blog
 ```
+
+### `git-review` — one-shot PR review (optionally auto-fix + push)
+
+Shallow-clones a GitHub PR into `/tmp`, launches Claude inside the
+`claude-review:local` container with `claude/prompts/review.md`. Claude reviews;
+with `--fix` it applies findings and pushes them (nit-class → author's branch,
+rearchitect-class → stacked PR). GitHub work goes through MCP tools; `gh` is
+denied.
+
+```sh
+git review owner/repo 1234                              # review-only
+git review <url> --fix                                  # apply findings + push
+git review <url> --fix --no-interactive                 # yolo (safe in-container)
+git review <url> --no-docker                            # on-host claude
+git review <url> --model claude-opus-4-8
+```
+
+Full guide, mount table, troubleshooting: [`docs/git-review.md`](docs/git-review.md).
+
+### `git-feature` — new feature or bug-fix branch, containerized
+
+Symmetric to `git-review`: `git feature "<description>"` creates a fresh
+branch off `origin/main`, asks Claude Haiku for a compact tmux session name,
+and launches Claude inside the `claude-review:local` container with
+`claude/prompts/make-pr.md`. `bin/pr-spin` remains as a back-compat symlink.
+
+```sh
+git feature "validate email length before save"
+git feature ~/go/src/.../orbital "remove unused redis client"
+git feature <desc> --no-docker                          # on-host claude
+git feature <desc> --model claude-opus-4-8
+```
+
+Full guide: [`docs/git-feature.md`](docs/git-feature.md).
+
+### Shared plumbing: `claude-in-docker`, `gen-compose-override`
+
+Both `git-review` and `git-feature` use:
+
+- `bin/claude-in-docker` — runs `claude --dangerously-skip-permissions` in
+  `claude-review:local` with a narrow set of host mounts (workdir, `~/.claude`,
+  `~/.gitconfig`, `~/.private`, `~/.ssh`, docker socket).
+- `bin/gen-compose-override` — if the workdir has a `docker-compose.y{,a}ml`,
+  writes `.env.review` + `docker-compose.override.yml` with randomized host
+  ports (49152–65535) and a per-workdir `COMPOSE_PROJECT_NAME`. Uses the
+  Compose v2.24+ `!override` YAML tag.
+- `docker/claude-review/Dockerfile` — the image (`node:22-slim` + git + ssh
+  + docker CLI + `@anthropic-ai/claude-code`). Built lazily by
+  `claude-in-docker` on first use, or ahead of time with
+  `docker build -t claude-review:local ~/.dotfiles/docker/claude-review/`.
 
 ### `macos-defaults` — apply system preferences
 

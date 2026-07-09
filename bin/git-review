@@ -4,20 +4,33 @@
 # auto-discovers `git-*` on PATH.
 #
 # Usage:
-#   git review <owner/repo> <pr-number>
-#   git review <github-pr-url>
+#   git review <owner/repo> <pr-number> [flags]
+#   git review <github-pr-url>           [flags]
+#
+# Flags:
+#   --fix                 Apply findings + push. Claude decides whether to
+#                         push to the author's branch (nit-class) or open
+#                         a stacked PR (rearchitect-class).
+#   --no-docker           Run Claude on the host (old behavior) instead of
+#                         inside the claude-review container.
+#   --no-compose-override Skip generating a per-PR docker-compose override
+#                         with randomized ports.
+#   --interactive         Ask before posting/pushing (default).
+#   --no-interactive      Yolo mode. Only sane inside the container.
+#   --model <id>          Model id passed to claude (e.g. claude-opus-4-8).
 #
 # Example:
-#   git review wealthsimple/orbital 1234
-#   git review https://github.com/wealthsimple/orbital/pull/1234
+#   git review owner/repo 1234
+#   git review https://github.com/owner/repo/pull/1234 --fix
 #
 # What it does:
 #   1. Shallow-clone the repo to /tmp/git-review-<repo>-<pr>.XXXX
 #   2. Fetch the PR head ref and check it out
-#   3. cd into the workdir
-#   4. Launch claude with claude/prompts/review.md as the initial
-#      message, telling it to use the MCPLocker GitHub tools to pull
-#      PR metadata and form a review.
+#   3. Generate docker-compose.override.yml (unless --no-compose-override)
+#   4. Launch Claude — in the claude-review container by default, or on
+#      the host with --no-docker. The initial message is
+#      claude/prompts/review.md with the PR URL, workdir, and mode
+#      signals appended.
 
 set -euo pipefail
 
@@ -25,20 +38,98 @@ PROMPT_FILE="$HOME/.dotfiles/claude/prompts/review.md"
 [[ -f $PROMPT_FILE ]] || { echo "missing prompt: $PROMPT_FILE" >&2; exit 1; }
 command -v claude >/dev/null 2>&1 || { echo "claude CLI not found" >&2; exit 1; }
 
+# ANSI styling. Skipped when stdout isn't a TTY or NO_COLOR is set
+# (https://no-color.org), so `git review --help | less -R` and CI logs
+# stay clean.
+if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
+    _B=$'\033[1m'; _D=$'\033[2m'; _I=$'\033[3m'
+    _C=$'\033[36m'; _Y=$'\033[33m'; _M=$'\033[35m'; _G=$'\033[32m'
+    _R=$'\033[0m'
+else
+    _B=''; _D=''; _I=''; _C=''; _Y=''; _M=''; _G=''; _R=''
+fi
+
+usage() {
+    cat <<EOF
+${_B}git-review${_R} ${_D}— one-shot PR review, containerized, with optional auto-fix${_R}
+
+  ${_D}Clones a GitHub PR into /tmp, launches Claude inside the${_R}
+  ${_D}claude-review:local container with claude/prompts/review.md as${_R}
+  ${_D}the initial message. With --fix, Claude applies its own findings${_R}
+  ${_D}and pushes them (nit → author's branch; rearchitect → stacked PR).${_R}
+
+${_Y}USAGE${_R}
+  ${_C}git review${_R} ${_M}<owner/repo>${_R} ${_M}<pr-number>${_R} ${_D}[flags]${_R}
+  ${_C}git review${_R} ${_M}<github-pr-url>${_R} ${_D}[flags]${_R}
+
+${_Y}FLAGS${_R}
+  ${_B}--fix${_R}                     ${_D}Apply findings + push. Claude decides whether to${_R}
+                            ${_D}push to the author's branch or open a stacked PR.${_R}
+  ${_B}--no-docker${_R}               ${_D}Run Claude on the host (skip the container).${_R}
+  ${_B}--no-compose-override${_R}     ${_D}Skip generating docker-compose.override.yml${_R}
+                            ${_D}with randomized host ports.${_R}
+  ${_B}--interactive${_R}             ${_D}Prompt-level: ask before posting/pushing (default).${_R}
+  ${_B}--no-interactive${_R}          ${_D}Prompt-level: skip prompt-side confirmations.${_R}
+  ${_B}--yolo${_R}                    ${_D}Add --dangerously-skip-permissions to claude.${_R}
+                            ${_D}Off by default; the container sandbox is your${_R}
+                            ${_D}safety net when you turn it on.${_R}
+  ${_B}--model${_R} ${_M}<id>${_R}              ${_D}Model id, e.g. claude-opus-4-8.${_R}
+  ${_B}-h${_R}, ${_B}--help${_R}                ${_D}Show this help.${_R}
+
+${_Y}EXAMPLES${_R}
+  ${_G}\$${_R} ${_C}git review${_R} owner/repo 1234
+  ${_G}\$${_R} ${_C}git review${_R} https://github.com/owner/repo/pull/1234
+  ${_G}\$${_R} ${_C}git review${_R} <url> ${_B}--fix${_R}
+  ${_G}\$${_R} ${_C}git review${_R} <url> ${_B}--fix${_R} ${_B}--no-interactive${_R}
+  ${_G}\$${_R} ${_C}git review${_R} <url> ${_B}--model${_R} ${_M}claude-opus-4-8${_R}
+
+${_Y}DOCS${_R}
+  ${_I}~/.dotfiles/docs/git-review.md${_R}
+EOF
+}
+
+fix=0
+use_docker=1
+gen_override=1
+interactive=1
+yolo=0
+model=""
+positional=()
+
+while (( $# )); do
+    case $1 in
+        --fix)                 fix=1;              shift ;;
+        --no-docker)           use_docker=0;       shift ;;
+        --no-compose-override) gen_override=0;     shift ;;
+        --interactive)         interactive=1;      shift ;;
+        --no-interactive)      interactive=0;      shift ;;
+        --yolo|--dangerously-skip-permissions)
+                               yolo=1;             shift ;;
+        --model)               model=$2;           shift 2 ;;
+        --model=*)             model=${1#--model=};shift ;;
+        -h|--help)             usage; exit 0 ;;
+        --) shift; positional+=("$@"); break ;;
+        -*)
+            echo "git-review: unknown flag $1" >&2; exit 2 ;;
+        *)  positional+=("$1"); shift ;;
+    esac
+done
+
 owner=""; repo=""; pr=""
-if [[ ${1:-} =~ ^https?://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)/?$ ]]; then
+if [[ ${#positional[@]} -eq 1 && ${positional[0]} =~ ^https?://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)/?$ ]]; then
     owner=${BASH_REMATCH[1]}
     repo=${BASH_REMATCH[2]}
     pr=${BASH_REMATCH[3]}
-elif [[ $# -eq 2 && ${1:-} =~ ^([^/]+)/([^/]+)$ && ${2:-} =~ ^[0-9]+$ ]]; then
+elif [[ ${#positional[@]} -eq 2 && ${positional[0]} =~ ^([^/]+)/([^/]+)$ && ${positional[1]} =~ ^[0-9]+$ ]]; then
     owner=${BASH_REMATCH[1]}
     repo=${BASH_REMATCH[2]}
-    pr=$2
+    pr=${positional[1]}
 else
     cat >&2 <<EOF
 usage:
-  git review <owner/repo> <pr-number>
-  git review <github-pr-url>
+  git review <owner/repo> <pr-number> [flags]
+  git review <github-pr-url>          [flags]
+Try 'git review --help' for flag descriptions.
 EOF
     exit 2
 fi
@@ -53,16 +144,250 @@ git -C "$workdir" fetch --depth=1 origin "pull/$pr/head:pr-$pr" >/dev/null 2>&1 
     || { echo "fetch failed (PR #$pr exists?)" >&2; exit 1; }
 git -C "$workdir" checkout "pr-$pr" >/dev/null 2>&1
 
-# Build the initial prompt: review template + the specific PR URL so
-# Claude can reach for it via MCPLocker without having to ask.
-initial=$(
+if (( gen_override )); then
+    if [[ -x "$HOME/.dotfiles/bin/gen-compose-override" ]]; then
+        echo "→ Generating compose override (randomized ports)"
+        "$HOME/.dotfiles/bin/gen-compose-override" "$workdir" "$pr" || true
+    fi
+fi
+
+mode="review"; (( fix )) && mode="fix"
+pr_url="https://github.com/$owner/$repo/pull/$pr"
+
+# Task-first prompt ordering: the PR context is at the top so it's
+# visible as soon as claude renders the paste, and repeated at the
+# bottom so it's fresh in the model's context.
+prompt_path=$(mktemp -t git-review-prompt.XXXXXX)
+{
+    echo "# PR under review"
+    echo
+    echo "$pr_url"
+    echo
+    echo "## Environment"
+    echo
+    echo "- Local checkout: $workdir (already at PR's HEAD, on branch pr-$pr)"
+    echo "- REVIEW_MODE=$mode"
+    echo "- INTERACTIVE=$interactive"
+    echo "- WORKDIR=$workdir"
+    echo "- PR_URL=$pr_url"
+    echo
+    echo "---"
+    echo
+    echo "# Review instructions"
+    echo
     cat "$PROMPT_FILE"
     echo
     echo "---"
-    echo "PR to review: https://github.com/$owner/$repo/pull/$pr"
-    echo "Local checkout: $workdir (already at the PR's HEAD)"
-)
+    echo
+    echo "# Reminder"
+    echo
+    echo "PR under review: $pr_url  (REVIEW_MODE=$mode, INTERACTIVE=$interactive)"
+} > "$prompt_path"
+
+# Pre-populate ~/.claude.json for this workdir so claude doesn't prompt
+# for trust / MCP approval every run. Each /tmp/git-review-* path is
+# new, so per-project state doesn't carry over unless we write it here.
+if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
+    mcp_servers_json='[]'
+    if [[ -f $workdir/.mcp.json ]]; then
+        mcp_servers_json=$(jq -c '(.mcpServers // {}) | keys' "$workdir/.mcp.json" 2>/dev/null || echo '[]')
+    fi
+    echo "→ Pre-approving trust + MCP for $workdir"
+    tmp_claude=$(mktemp -t claude-json.XXXXXX)
+    if jq --arg dir "$workdir" \
+          --argjson servers "$mcp_servers_json" \
+          '.projects[$dir] = ((.projects[$dir] // {}) + {
+              hasTrustDialogAccepted: true,
+              hasClaudeMdExternalIncludesApproved: true,
+              hasClaudeMdExternalIncludesWarningShown: true,
+              projectOnboardingSeenCount: 1,
+              enabledMcpjsonServers: (((.projects[$dir].enabledMcpjsonServers // []) + $servers) | unique),
+              allowedTools: (.projects[$dir].allowedTools // []),
+              mcpContextUris: (.projects[$dir].mcpContextUris // []),
+              disabledMcpjsonServers: (.projects[$dir].disabledMcpjsonServers // []),
+              mcpServers: (.projects[$dir].mcpServers // {})
+          })' "$HOME/.claude.json" > "$tmp_claude" \
+       && [[ -s $tmp_claude ]]; then
+        mv "$tmp_claude" "$HOME/.claude.json"
+    else
+        rm -f "$tmp_claude"
+    fi
+fi
+
+export CLAUDE_REVIEW_MODE=$mode
+export CLAUDE_REVIEW_INTERACTIVE=$interactive
+export CLAUDE_REVIEW_WORKDIR=$workdir
+export CLAUDE_REVIEW_PR_URL=$pr_url
 
 cd "$workdir"
-echo "→ Launching Claude in $workdir"
-exec claude "$initial"
+
+# --no-docker path: run claude on the host. No tmux 3-pane setup —
+# the review workflow is one-shot, and the positional-prompt argument
+# works reliably against the host claude binary. This path is unchanged
+# from the pre-container behavior.
+if (( ! use_docker )); then
+    echo "→ Launching Claude (host) in $workdir"
+    initial=$(cat "$prompt_path")
+    rm -f "$prompt_path"
+    cmd=(claude)
+    [[ -n $model ]] && cmd+=(--model "$model")
+    (( yolo )) && cmd+=(--dangerously-skip-permissions)
+    cmd+=("$initial")
+    exec "${cmd[@]}"
+fi
+
+# Containerized 3-pane tmux flow — mirrors bin/git-feature. Falls back
+# to plain in-terminal claude-in-docker if tmux isn't available.
+if ! command -v tmux >/dev/null 2>&1; then
+    echo "tmux not installed — launching claude-in-docker directly (no panes)" >&2
+    fallback_args=(--workdir "$workdir")
+    [[ -n $model ]] && fallback_args+=(--model "$model")
+    (( yolo )) && fallback_args+=(--yolo)
+    exec "$HOME/.dotfiles/bin/claude-in-docker" "${fallback_args[@]}"
+fi
+
+# Session name — deterministic per PR, with the mktemp suffix baked in
+# for uniqueness across reruns of the same PR.
+session="review-${repo}-pr${pr}-${workdir##*.}"
+session=$(printf '%s' "$session" | tr '.:' '__' | cut -c1-40)
+if tmux has-session -t "$session" 2>/dev/null; then
+    session="${session}-$$"
+fi
+
+# Container name uses the workdir basename (which includes mktemp's
+# random suffix), guaranteeing uniqueness per invocation.
+container_name="claude-review-$(basename "$workdir")"
+export CLAUDE_REVIEW_CONTAINER_NAME=$container_name
+
+# inner_cmd — no positional prompt (tmux paste-buffer handles that).
+if [[ -x "$HOME/.dotfiles/bin/claude-in-docker" ]]; then
+    inner_cmd="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$workdir'"
+    [[ -n $model ]] && inner_cmd+=" --model '$model'"
+    (( yolo )) && inner_cmd+=" --yolo"
+else
+    inner_cmd="claude"
+    [[ -n $model ]] && inner_cmd+=" --model '$model'"
+    (( yolo )) && inner_cmd+=" --dangerously-skip-permissions"
+fi
+
+# Pane 0 launcher: keeps pane alive after claude exits, resets terminal
+# mouse-tracking modes, tears down the whole session on Ctrl-D.
+launch_cmd=$(cat <<EOSH
+{ $inner_cmd; }
+_ec=\$?
+printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?2004l'
+printf '\n\033[2m[claude exited with status %s — pane kept open. Ctrl-D here kills the whole session (all 3 panes). Prefix+d to detach without killing.]\033[0m\n' "\$_ec"
+\${SHELL:-/bin/zsh} -l
+tmux kill-session -t '$session' 2>/dev/null || true
+EOSH
+)
+
+# Pane 1: compose logs with retry loop.
+if [[ -f $workdir/.env.review ]]; then
+    compose_cmd=$(cat <<EOSH
+cd '$workdir'
+while :; do
+    if docker compose --env-file .env.review ps --services --status running 2>/dev/null | grep -q .; then
+        docker compose --env-file .env.review logs -f --tail 200 2>&1 || true
+    else
+        printf '\033[2m[waiting for compose services (project=review-pr-${pr}) — retrying in 3s]\033[0m\n'
+        sleep 3
+    fi
+done
+EOSH
+)
+else
+    compose_cmd="printf '\033[2m[no docker-compose.override.yml in this workdir — nothing to tail]\033[0m\n'; exec \${SHELL:-/bin/zsh} -l"
+fi
+
+# Pane 2: shell inside the running container.
+container_shell_cmd=$(cat <<EOSH
+cd '$workdir'
+printf '\033[2mwaiting for container "%s" to start (up to 60s)...\033[0m\n' '$container_name'
+for _ in \$(seq 1 60); do
+    if docker inspect -f '{{.State.Running}}' '$container_name' 2>/dev/null | grep -q true; then
+        break
+    fi
+    sleep 1
+done
+if docker inspect -f '{{.State.Running}}' '$container_name' 2>/dev/null | grep -q true; then
+    docker exec -it '$container_name' bash 2>/dev/null || docker exec -it '$container_name' sh
+    printf '\n\033[2m[container shell exited — pane kept open]\033[0m\n'
+else
+    printf '\033[2m[container "%s" never came up; falling back to host shell in workdir]\033[0m\n' '$container_name'
+fi
+exec \${SHELL:-/bin/zsh} -l
+EOSH
+)
+
+# Paper-trail before handoff.
+cat <<EOF
+→ tmux session:    $session
+→ Container name:  $container_name
+→ PR URL:          $pr_url
+→ Reattach:        tmux attach -t $session
+→ Peek read-only:  tmux attach -r -t $session
+EOF
+
+# Build the three panes using pane IDs (survives base-index != 0).
+main_pane=$(tmux new-session -d -s "$session" -c "$workdir" \
+    -P -F '#{pane_id}' "$launch_cmd")
+compose_pane=$(tmux split-window -h -t "$main_pane" -c "$workdir" -l 40% \
+    -P -F '#{pane_id}' "$compose_cmd")
+shell_pane=$(tmux split-window -v -t "$compose_pane" -c "$workdir" -l 50% \
+    -P -F '#{pane_id}' "$container_shell_cmd")
+
+tmux set-option -t "$session" mouse on 2>/dev/null || true
+tmux set-window-option -t "$main_pane" pane-border-status top 2>/dev/null || true
+tmux select-pane -t "$main_pane"    -T "claude"          2>/dev/null || true
+tmux select-pane -t "$compose_pane" -T "compose logs"    2>/dev/null || true
+tmux select-pane -t "$shell_pane"   -T "container shell" 2>/dev/null || true
+tmux select-pane -t "$main_pane"
+
+# Prompt injector — server-side background task so it survives the
+# `exec tmux attach` handoff. Waits for the container to be running,
+# lets claude's TUI render, then paste-buffers the prompt in.
+buf_name="gr-$$-$(printf '%s' "$session" | tr -c '[:alnum:]' _)"
+injector_log="${TMPDIR:-/tmp}/git-review-injector-$$.log"
+injector_path=$(mktemp -t git-review-injector.XXXXXX)
+chmod +x "$injector_path"
+cat > "$injector_path" <<INJECTOR_EOF
+#!/usr/bin/env bash
+exec >>"$injector_log" 2>&1
+echo "=== injector started at \$(date) ==="
+if [[ $use_docker -eq 1 ]]; then
+    for i in \$(seq 1 60); do
+        if docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null | grep -q true; then
+            echo "container running after \${i}s"
+            break
+        fi
+        sleep 1
+    done
+    sleep 3
+else
+    sleep 2
+fi
+if [[ ! -f "$prompt_path" ]]; then
+    echo "prompt file missing: $prompt_path"
+    exit 0
+fi
+if ! tmux has-session -t "$session" 2>/dev/null; then
+    echo "tmux session '$session' no longer exists"
+    exit 0
+fi
+echo "loading buffer + pasting to pane $main_pane"
+tmux load-buffer -b "$buf_name" "$prompt_path"
+tmux paste-buffer -p -b "$buf_name" -t "$main_pane" -d
+sleep 2
+tmux send-keys -t "$main_pane" Enter
+echo "=== injector done ==="
+rm -f "$prompt_path" "\$0"
+INJECTOR_EOF
+
+tmux run-shell -b "$injector_path"
+
+if [[ -z "${TMUX:-}" ]]; then
+    exec tmux attach -t "$session"
+else
+    exec tmux switch-client -t "$session"
+fi

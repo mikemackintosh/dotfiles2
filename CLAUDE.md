@@ -34,8 +34,11 @@ README.md                                 → user-facing reference
 bin/                                      → user scripts (on $PATH)
   memories                                  Claude memory browser/creator/grep
   tmux-sessionizer                          fzf project picker (prefix+T in tmux)
-  git-review                                local PR review via /tmp + claude
-  pr-spin                                   spin up a "PR making" session
+  git-review                                local PR review via /tmp + containerized claude
+  git-feature                               new feature/bug branch + containerized claude in tmux
+  pr-spin                                   back-compat symlink → git-feature
+  claude-in-docker                          runs claude with narrow host mounts (safe --dangerously-*)
+  gen-compose-override                      randomizes docker-compose ports per PR/branch
   notify                                    osascript notification wrapper
   macos-defaults                            apply scrolling / cursor / Dock prefs
   docker-shim                               multi-call Docker shim; tool names
@@ -44,6 +47,10 @@ claude/                                   → Claude Code config
   settings.json                             symlinked into ~/.claude/
   statusline.sh                             symlinked into ~/.claude/
   prompts/                                  workflow prompt templates
+docker/                                   → Dockerfiles built by our tools
+  claude-review/                            base image for claude-in-docker
+docs/                                     → per-tool deep-dive docs
+  git-review.md, git-feature.md             ← start here to learn a tool
 githooks/                                 → global hooks (core.hooksPath)
   pre-commit                                gofmt + go vet on staged .go files
   pre-push                                  gitleaks on push
