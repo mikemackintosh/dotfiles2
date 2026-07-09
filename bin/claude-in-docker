@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+# claude-in-docker — run Claude Code inside a container with a narrow set
+# of host mounts. Built to be driven by bin/git-review and bin/git-feature
+# but usable standalone.
+#
+# Usage:
+#   claude-in-docker --workdir <path> [--model <id>] [--yolo] [--] <initial prompt>
+#
+# Flags:
+#   --workdir <path>   Absolute path to the workdir to mount (required).
+#   --model <id>       Model id passed to claude.
+#   --yolo             Add --dangerously-skip-permissions to the claude
+#                      invocation. Off by default — Claude will ask before
+#                      dangerous operations unless this is explicit.
+
+set -euo pipefail
+
+IMAGE="${CLAUDE_REVIEW_IMAGE:-claude-review:local}"
+DOCKERFILE_DIR="${CLAUDE_REVIEW_DOCKERFILE_DIR:-$HOME/.dotfiles/docker/claude-review}"
+
+workdir=""
+model=""
+prompt=""
+yolo=0
+while (( $# )); do
+    case $1 in
+        --workdir) workdir=$2; shift 2 ;;
+        --model)   model=$2;   shift 2 ;;
+        --yolo)    yolo=1;     shift ;;
+        --)        shift; prompt="$*"; break ;;
+        -h|--help)
+            sed -n '2,15p' "$0"; exit 0 ;;
+        *)
+            prompt="$*"; break ;;
+    esac
+done
+
+[[ -n $workdir ]] || { echo "claude-in-docker: --workdir is required" >&2; exit 2; }
+[[ -d $workdir ]] || { echo "claude-in-docker: workdir $workdir does not exist" >&2; exit 2; }
+# Prompt is optional: bin/git-feature injects the prompt via tmux
+# paste-buffer after claude's TUI is up. Standalone callers can still
+# pass a positional prompt, and claude will get it as its final arg.
+
+# Resolve docker under a minimal PATH — same pattern as bin/docker-shim:77-86.
+docker_bin=$(command -v docker 2>/dev/null || true)
+if [[ -z $docker_bin ]]; then
+    for c in /usr/local/bin/docker /opt/homebrew/bin/docker "$HOME/.docker/bin/docker"; do
+        [[ -x $c ]] && { docker_bin=$c; break; }
+    done
+fi
+[[ -n $docker_bin ]] || { echo "claude-in-docker: docker not found" >&2; exit 127; }
+
+# Lazy build. Uses a BuildKit secret mount for ~/.npmrc so the build
+# can pull @anthropic-ai/claude-code from a private npm registry
+# without baking auth into the image. DOCKER_BUILDKIT=1 is honored by
+# every modern Docker Desktop; force it in case the host env has it off.
+if ! "$docker_bin" image inspect "$IMAGE" >/dev/null 2>&1; then
+    [[ -f $DOCKERFILE_DIR/Dockerfile ]] || {
+        echo "claude-in-docker: image $IMAGE missing and $DOCKERFILE_DIR/Dockerfile not found" >&2
+        exit 1
+    }
+    build_args=(build -t "$IMAGE")
+    if [[ -f $HOME/.npmrc ]]; then
+        build_args+=(--secret "id=npmrc,src=$HOME/.npmrc")
+    fi
+    build_args+=("$DOCKERFILE_DIR")
+    echo "→ building $IMAGE (first run)"
+    DOCKER_BUILDKIT=1 "$docker_bin" "${build_args[@]}"
+fi
+
+run=(run --rm -i)
+[[ -t 0 && -t 1 ]] && run+=(-t)
+
+# Docker socket access. /var/run/docker.sock inside the container is
+# root:root mode 0660 (Docker Desktop's default). Our container process
+# runs as uid 501/gid 20 with no supplementary groups, so it can't read
+# the socket → any `docker` command inside fails with EACCES.
+# Adding group 0 as a supplementary group grants group-read on the
+# socket without needing root privileges or a `docker` group inside
+# the image. Only effective inside the container (host membership
+# unchanged).
+run+=(--group-add 0)
+
+# Give the container a predictable name so bin/git-feature's third
+# tmux pane can `docker exec -it $name bash` into it while it runs.
+# Fallback: docker generates one and we lose the exec-into-container
+# affordance for that run.
+container_name=${CLAUDE_REVIEW_CONTAINER_NAME:-}
+if [[ -n $container_name ]]; then
+    # Reap any container with this name left behind by a prior run
+    # (crashed docker daemon, ungraceful kill, --rm not firing, etc.).
+    # This is why previous runs got "container name already in use".
+    "$docker_bin" rm -f "$container_name" >/dev/null 2>&1 || true
+    run+=(--name "$container_name")
+fi
+
+# Fake /etc/passwd + /etc/group entries for the host UID. Docker's -u
+# flag makes the container process run as that UID, but the Linux
+# passwd DB inside the image doesn't know it — ssh, some node modules,
+# and any getpwuid() call fail with "no passwd entry for uid 501".
+# Overwrite a fixed path so it's cheap to regenerate each run.
+passwd_file="${TMPDIR:-/tmp}/claude-in-docker.passwd"
+group_file="${TMPDIR:-/tmp}/claude-in-docker.group"
+{
+    echo "root:x:0:0:root:/root:/bin/bash"
+    echo "${USER:-user}:x:$(id -u):$(id -g):${USER:-user}:$HOME:/bin/bash"
+    echo "nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin"
+} > "$passwd_file"
+{
+    echo "root:x:0:"
+    echo "${USER:-user}:x:$(id -g):"
+    echo "nobody:x:65534:"
+} > "$group_file"
+run+=(-v "$passwd_file:/etc/passwd:ro" -v "$group_file:/etc/group:ro")
+
+# Silence "claude command at ~/.local/bin/claude missing or broken"
+# warning: your host Claude Code was installed via `claude install`,
+# which put the binary at ~/.local/bin/claude and recorded that path
+# in ~/.claude.json. Inside the container the real claude is at
+# /usr/local/bin/claude (via `npm i -g` in the Dockerfile), so the
+# recorded native path is a dead pointer. Shim it to delegate.
+claude_shim="${TMPDIR:-/tmp}/claude-in-docker.claude-shim"
+cat > "$claude_shim" <<'SHIM'
+#!/bin/sh
+exec /usr/local/bin/claude "$@"
+SHIM
+chmod +x "$claude_shim"
+run+=(-v "$claude_shim:$HOME/.local/bin/claude:ro")
+
+# Narrow mounts. See the plan for justification per line.
+run+=(
+    -u "$(id -u):$(id -g)"
+    -w "$workdir"
+    -e HOME="$HOME"
+    -v "$workdir:$workdir"
+    -v "$HOME/.claude:$HOME/.claude"
+    -v "/var/run/docker.sock:/var/run/docker.sock"
+)
+
+# ~/.claude.json lives OUTSIDE ~/.claude and stores top-level state:
+# hasCompletedOnboarding, oauthAccount, machineID, and the per-project
+# trust / MCP approvals we pre-populate from bin/git-feature. Without
+# this mount every container run is a "first run" and triggers the
+# onboarding wizard (theme picker, welcome screen, etc.).
+# Must exist on the host — touch it if the user has never run claude
+# so the mount target isn't a directory (Docker's default when the
+# source doesn't exist).
+[[ -f $HOME/.claude.json ]] || touch "$HOME/.claude.json"
+run+=(-v "$HOME/.claude.json:$HOME/.claude.json")
+
+# Optional mounts — skip if the file/dir doesn't exist on the host so we
+# don't error on machines that never set them up.
+[[ -f $HOME/.gitconfig      ]] && run+=(-v "$HOME/.gitconfig:$HOME/.gitconfig:ro")
+[[ -d $HOME/.private        ]] && run+=(-v "$HOME/.private:$HOME/.private:ro")
+
+# .ssh — expose only known_hosts + config (private keys stay off the
+# container's filesystem). Auth goes through the forwarded 1P SSH
+# agent socket below.
+#
+# Direct per-file mounts don't work here: Docker auto-creates the
+# parent directory as root:root 0755, but SSH's StrictModes check
+# refuses to use ~/.ssh unless it's owned by the running user
+# (uid=501) with mode 700. Instead we stage a real ~/.ssh dir on the
+# host with the right ownership + only the files we want to expose,
+# then bind-mount the staging directory. Mounted RW so ssh can
+# update known_hosts on first connection to new hosts — changes
+# stay in the staging dir, never propagate back to the real
+# ~/.ssh on the host.
+ssh_stage="${TMPDIR:-/tmp}/claude-in-docker.ssh"
+rm -rf "$ssh_stage"
+mkdir -m 700 "$ssh_stage"
+for _ssh_file in known_hosts config; do
+    [[ -f $HOME/.ssh/$_ssh_file ]] && cp -p "$HOME/.ssh/$_ssh_file" "$ssh_stage/$_ssh_file"
+done
+if [[ -d $HOME/.ssh/known_hosts.d ]]; then
+    cp -pR "$HOME/.ssh/known_hosts.d" "$ssh_stage/"
+fi
+# Ensure the FILES have sane perms too (600 for config, 644 for hosts).
+[[ -f $ssh_stage/config      ]] && chmod 600 "$ssh_stage/config"
+[[ -f $ssh_stage/known_hosts ]] && chmod 644 "$ssh_stage/known_hosts"
+run+=(-v "$ssh_stage:$HOME/.ssh")
+
+# ~/.npmrc — needed for any `npx <pkg>` MCP servers pulling from a
+# private npm registry. Runtime-only; build-time uses the BuildKit
+# secret mount above.
+[[ -f $HOME/.npmrc          ]] && run+=(-v "$HOME/.npmrc:$HOME/.npmrc:ro")
+
+# ~/.claude/settings.json contains hooks that call macOS-only binaries
+# (e.g. iTerm2's cc-status at ~/.config/iterm2/cc-status). Mount a
+# no-op stub over that exact path so the hooks succeed silently
+# instead of printing "not found" spam on every tool call.
+stub="$HOME/.dotfiles/docker/claude-review/cc-status-stub"
+[[ -x $stub ]] && run+=(-v "$stub:$HOME/.config/iterm2/cc-status:ro")
+
+# ~/.claude/ often contains symlinks that point at files under
+# ~/.dotfiles/claude/ (e.g. statusline.sh → ~/.dotfiles/claude/statusline.sh).
+# Mount the source directory read-only so those symlinks resolve
+# inside the container — otherwise you get the default claude status
+# line instead of your custom one, and any hooks referencing files
+# there would silently no-op.
+[[ -d $HOME/.dotfiles/claude ]] && run+=(-v "$HOME/.dotfiles/claude:$HOME/.dotfiles/claude:ro")
+
+# SSH agent forwarding — for `git push` under passphrased keys AND for
+# SSH-based commit signing (1Password Agent). Prefer whatever SSH_AUTH_SOCK
+# already points at, but if that's the stock macOS Keychain agent or
+# unset, auto-detect 1Password's socket at its known location.
+one_p_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+ssh_sock=""
+if [[ -n ${SSH_AUTH_SOCK:-} && -S ${SSH_AUTH_SOCK} \
+      && ${SSH_AUTH_SOCK} != /var/run/com.apple.launchd.*/Listeners ]]; then
+    ssh_sock=$SSH_AUTH_SOCK
+elif [[ -S $one_p_sock ]]; then
+    ssh_sock=$one_p_sock
+    echo "→ 1Password SSH agent detected — forwarding into container" >&2
+fi
+
+if [[ -n $ssh_sock ]]; then
+    # SAME-PATH mount. Your ~/.ssh/config typically sets:
+    #   IdentityAgent ~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock
+    # If we remap to /tmp/ssh-agent.sock, that IdentityAgent line points
+    # at a path that doesn't exist inside the container and SSH errors
+    # with "no such file". Mounting the socket at its literal macOS path
+    # inside the container makes ssh_config resolve verbatim, so `git
+    # push` and `git commit -S` both go straight to 1Password — same
+    # code path as your host Mac.
+    run+=(-v "$ssh_sock:$ssh_sock")
+    run+=(-e "SSH_AUTH_SOCK=$ssh_sock")
+fi
+
+# Neutralize gpg.ssh.program on the host side. ~/.private/gitconfig
+# is mounted RO and typically points at /Applications/1Password.app/
+# Contents/MacOS/op-ssh-sign — a macOS binary that doesn't exist in
+# the Linux container. GIT_CONFIG_PARAMETERS overrides that to the
+# git default (ssh-keygen), which talks to the SSH agent socket we
+# just forwarded above. Single-quoted here so the value survives the
+# shell that git spawns; git parses the quoted-list format.
+run+=(-e "GIT_CONFIG_PARAMETERS='gpg.ssh.program=ssh-keygen'")
+
+# Pass through relevant env vars if set. `-e VAR` (no value) forwards the
+# host value; docker ignores unset vars. NB: SSH_AUTH_SOCK handled above.
+for v in ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL \
+         CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX \
+         GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL \
+         GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL; do
+    [[ -n ${!v:-} ]] && run+=(-e "$v")
+done
+# Forward all CLAUDE_REVIEW_* signals set by git-review / git-feature.
+while IFS='=' read -r k _; do
+    [[ $k == CLAUDE_REVIEW_* ]] && run+=(-e "$k")
+done < <(env)
+
+# Launch claude. When bin/git-feature invokes us it doesn't pass a
+# positional prompt — Claude v2's positional-prompt behavior isn't
+# reliable for our use case. bin/git-feature injects the prompt via
+# tmux paste-buffer after claude's TUI is up.
+# Standalone callers may still pass a prompt positionally and it'll
+# be appended as claude's final arg.
+run+=("$IMAGE" claude)
+(( yolo )) && run+=(--dangerously-skip-permissions)
+[[ -n $model ]] && run+=(--model "$model")
+[[ -n $prompt ]] && run+=("$prompt")
+
+exec "$docker_bin" "${run[@]}"
