@@ -7,7 +7,7 @@ goto() {
     return
   fi
 
-  TARGETS=($(find $GOPATH/src -name $DESTINATION -type d -maxdepth 3))
+  TARGETS=($(find $GOPATH/src -iname $DESTINATION -type d -maxdepth 3))
   TARGET_COUNT=${#TARGETS[@]}
   if [ $TARGET_COUNT -eq 0 ]; then
     echo $fg[orange] "Sorry! No matching dirs"
@@ -27,6 +27,19 @@ goto() {
     cd "${TARGETS[$itemnum]}"
   fi
 }
+
+# goto has no completion spec, so Tab was falling back to default filename
+# completion in $PWD — that's why `goto MCPLOCKER<Tab>` was matching
+# unrelated files like ~/MCPLOCKER-AINSTEIN.md instead of the actual
+# project dir. Restrict candidates to what goto actually searches
+# ($GOPATH/src, 3 levels deep), so Tab offers real targets and (via the
+# case-insensitive matcher-list already set in .zshrc) the correct case.
+_goto() {
+  local -a projects
+  projects=(${(f)"$(find "$GOPATH/src" -maxdepth 3 -type d -exec basename {} \; 2>/dev/null)"})
+  _describe 'project' projects
+}
+compdef _goto goto
 
 # Go list deps that are not standard for the
 golist(){
