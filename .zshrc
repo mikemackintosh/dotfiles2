@@ -79,6 +79,22 @@ extra_sources=(
 )
 export PATH="${(j.:.)extra_sources}:$STD_PATH"
 
+# Auto-load completion and tab menu. Must run before the plugin loop below —
+# `compdef` (used by go.zsh to register `_goto`) doesn't exist until compinit
+# defines it, so any plugin calling compdef before this point silently no-ops.
+# Skip the slow security check unless the dump is older than 24h.
+autoload -Uz compinit
+if [[ -n ~/.zcompdump(#qN.mh+24) ]]; then
+    compinit
+else
+    compinit -C
+fi
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
+zstyle ':completion:*' use-cache on
+zstyle ':completion:*' cache-path ~/.zsh/cache
+
 dot_plugins=(
     "alias"
     "git"
@@ -108,20 +124,6 @@ reload() {
     echo -e "\033[38;5;208mReloaded!\033[0m"
 }
 
-# Auto-load completion and tab menu
-# Skip the slow security check unless the dump is older than 24h.
-autoload -Uz compinit
-if [[ -n ~/.zcompdump(#qN.mh+24) ]]; then
-    compinit
-else
-    compinit -C
-fi
-zstyle ':completion:*' menu select
-zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
-zstyle ':completion:*' list-colors ${(s.:.)LS_COLORS}
-zstyle ':completion:*' use-cache on
-zstyle ':completion:*' cache-path ~/.zsh/cache
-
 # Move cursor to bottom of screen
 printf '\n%.0s' {1..$LINES}
 
@@ -136,6 +138,14 @@ source <(fzf --zsh)
 # eval "$(direnv hook zsh)"
 
 # zsh-autosuggestions: fish-style greyed suggestion from history
+# Strategy: try a history match first; if none exists, fall back to the
+# completion engine instead of showing nothing. Plain "history" alone will
+# happily resurface a stale/mistyped past command (wrong case, renamed dir,
+# etc.) with no check that it still resolves to anything real.
+ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+# Italicize the ghost text so it reads unmistakably as "not yet typed",
+# distinct from the dim-but-upright real text already on the line.
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=244,italic'
 source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 
 # Tab → completion (filesystem / commands / args). Always real menu
