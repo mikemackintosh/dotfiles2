@@ -160,23 +160,25 @@ find_local_reference() {
     done
 }
 
-# clone_to_agent_work <owner> <name> → prints the path of a fresh
-# checkout under ~/agent-work/<owner>/<name>-<random>. If a canonical
-# local checkout exists it's used as --reference so most objects come
-# from local disk instead of the network. Remote always points at
-# github so `git push` works normally.
+# clone_into_session <owner> <name> → prints the path of a fresh
+# checkout at $session_dir/<owner>/<name>. All clones from a single
+# git-feature invocation land under the same session_dir so Claude
+# can freely `cd` between sibling repos and `rm -rf $session_dir`
+# cleans up the whole session in one shot.
+#
+# If a canonical local checkout exists it's used as --reference so
+# most objects come from local disk instead of the network. Remote
+# always points at github so `git push` works normally.
 #
 # Auth strategy: prefer SSH via 1Password's agent when available.
 # The macOS Keychain agent (default $SSH_AUTH_SOCK) has been observed
 # to hang / fail with "communication with agent failed" — 1P's agent
 # is what actually holds the user's github keys anyway. Fall back to
 # HTTPS if 1P isn't running.
-clone_to_agent_work() {
+clone_into_session() {
     local owner=$1 name=$2
-    local parent="$HOME/agent-work/$owner"
-    mkdir -p "$parent"
-    local target
-    target=$(mktemp -d "$parent/${name}-XXXXXX")
+    local target="$session_dir/$owner/$name"
+    mkdir -p "$(dirname "$target")"
     local ref
     ref=$(find_local_reference "$owner" "$name")
 
@@ -220,6 +222,7 @@ clone_to_agent_work() {
 #         spec is a local directory → in-place mode, dirty check applies
 #         spec is URL / owner-repo → clone into ~/agent-work/, dirty check skipped
 in_place=1
+session_dir=""   # populated in session-clone mode below
 case ${#positional[@]} in
     1) repo=$(pwd); desc=${positional[0]} ;;
     2)
@@ -233,8 +236,16 @@ case ${#positional[@]} in
                 echo "git-feature: '$spec' isn't a local dir, a URL, or owner/repo shorthand" >&2
                 exit 2
             fi
-            repo=$(clone_to_agent_work "$_spec_owner" "$_spec_name") || {
+            # Session-scoped agent-work: every clone from this invocation
+            # (primary + any siblings you or Claude create later) lives
+            # under ~/agent-work/session-XXXXXX/. Nuking the session is
+            # one `rm -rf`.
+            mkdir -p "$HOME/agent-work"
+            session_dir=$(mktemp -d "$HOME/agent-work/session-XXXXXX")
+            echo "→ Session dir: $session_dir"
+            repo=$(clone_into_session "$_spec_owner" "$_spec_name") || {
                 echo "git-feature: clone failed" >&2
+                rmdir "$session_dir" 2>/dev/null || true
                 exit 1
             }
             in_place=0
@@ -354,26 +365,24 @@ fi
 # workdir so Claude Code doesn't prompt on startup. Each agent-work
 # clone is a NEW absolute path, so per-project state doesn't carry
 # across runs unless we write it here.
-# Determine "owner scope" directories — parents under agent-work or
-# ~/go/src/github.com/<owner> — so we can mount them into the container
-# and pre-approve trust for every sibling repo. Lets Claude work on
-# adjacent repos (e.g. commit to wealthsimple/scrappy from a session
-# that started in wealthsimple/mcplocker) without the auto-mode
-# permission classifier blocking cross-repo writes.
+# Determine adjacent-repo mount scope. Two ways Claude reaches
+# siblings during a session:
+#   A) Clone them into the session_dir at runtime — RW mount of
+#      $session_dir gives Claude write access. Best isolation.
+#   B) Reach the user's canonical checkouts under ~/go/src/github.com
+#      — RW mount lets Claude edit them in-place. Handy when you
+#      want the sibling change to land in your existing working tree.
 adjacent_dirs=()
-if [[ $repo == "$HOME/agent-work/"* ]]; then
-    # Pattern: $HOME/agent-work/<owner>/<repo>-XXXXXX
-    _agent_owner_dir="$(dirname "$repo")"
-    adjacent_dirs+=("$_agent_owner_dir")
-    # If a canonical checkout tree exists for this owner, mount that too
-    # so Claude can reach uncloned sibling repos.
-    _owner_name=$(basename "$_agent_owner_dir")
-    _canonical="$HOME/go/src/github.com/$_owner_name"
+if [[ -n $session_dir ]]; then
+    # Session-clone mode: mount the whole session dir (RW) + the
+    # canonical <owner>/ tree if it exists on host.
+    adjacent_dirs+=("$session_dir")
+    _canonical="$HOME/go/src/github.com/$_spec_owner"
     [[ -d $_canonical ]] && adjacent_dirs+=("$_canonical")
 elif [[ $repo == "$HOME/go/src/github.com/"* ]]; then
-    # Pattern: $HOME/go/src/github.com/<owner>/<repo>
-    _canonical_owner="$(dirname "$repo")"
-    adjacent_dirs+=("$_canonical_owner")
+    # In-place under go/src/github.com/<owner>/<repo> — mount the
+    # owner dir so sibling canonical checkouts are reachable.
+    adjacent_dirs+=("$(dirname "$repo")")
 fi
 
 # Export as colon-separated for claude-in-docker to mount.
@@ -400,9 +409,17 @@ if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
     # the auto-mode classifier blocking cross-repo writes.
     trusted_paths=("$repo")
     for d in "${adjacent_dirs[@]}"; do
-        while IFS= read -r sub; do
-            [[ -n $sub && -d $sub/.git ]] && trusted_paths+=("$sub")
-        done < <(find "$d" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+        # Session dir has a 2-level layout ($session_dir/<owner>/<repo>);
+        # canonical dirs have 1-level ($canonical_owner/<repo>).
+        if [[ $d == "$session_dir" ]]; then
+            while IFS= read -r sub; do
+                [[ -n $sub && -d $sub/.git ]] && trusted_paths+=("$sub")
+            done < <(find "$d" -mindepth 2 -maxdepth 2 -type d 2>/dev/null)
+        else
+            while IFS= read -r sub; do
+                [[ -n $sub && -d $sub/.git ]] && trusted_paths+=("$sub")
+            done < <(find "$d" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+        fi
     done
 
     echo "→ Pre-approving trust + MCP for ${#trusted_paths[@]} path(s)"
@@ -462,12 +479,14 @@ export CLAUDE_REVIEW_WORKDIR=$repo
 
 # Give the running container a UNIQUE-per-invocation name so pane 3
 # can `docker exec` into it AND so parallel git-feature invocations
-# never collide. The workdir basename alone isn't enough — in
-# cwd / local-path mode it's just the repo name and doesn't change
-# across invocations. Appending $$ (git-feature's PID) is guaranteed
-# unique for the lifetime of every invocation, so `claude-in-docker`'s
-# safety-reap (`docker rm -f`) can never kill another live session.
-container_name="claude-review-$(basename "$repo")-$$"
+# never collide.
+if [[ -n $session_dir ]]; then
+    # Session mode: session_dir basename is mktemp-unique.
+    container_name="claude-review-$(basename "$session_dir")"
+else
+    # In-place mode: workdir basename + PID for uniqueness.
+    container_name="claude-review-$(basename "$repo")-$$"
+fi
 export CLAUDE_REVIEW_CONTAINER_NAME=$container_name
 
 # Claude is launched WITHOUT the prompt on the command line. Claude
@@ -554,9 +573,21 @@ else
     printf '\n\033[2m[claude exited cleanly (status 0) — pane kept open.]\033[0m\n'
 fi
 
-printf '\033[2m[Ctrl-D here kills the whole session (all 3 panes). Prefix+d to detach.]\033[0m\n'
+printf '\033[2m[dropping to shell. Ctrl-D leaves the shell; the session and other 2 panes stay alive. Prefix+d to detach entirely. To wipe the session: tmux kill-session -t %s]\033[0m\n' '$session'
 \${SHELL:-/bin/zsh} -l
-tmux kill-session -t '$session' 2>/dev/null || true
+# Shell exited. DON'T auto-kill the session — the compose-logs pane
+# and container-shell pane may still be doing useful work, and the
+# user can always relaunch claude in this pane. If you want to kill
+# the whole session, use \`tmux kill-session -t $session\` or the
+# builtin prefix+& (kill-window). Prompt as a courtesy though.
+printf '\n\033[2m[pane 0 shell exited. Kill entire tmux session (all 3 panes)? y/N default no]\033[0m '
+read -t 30 _kill_reply || _kill_reply=n
+if [[ "\$_kill_reply" == [yY]* ]]; then
+    tmux kill-session -t '$session' 2>/dev/null || true
+else
+    printf '\033[2m[session %s left running — tmux attach -t %s to return]\033[0m\n' '$session' '$session'
+    sleep 2
+fi
 EOSH
 )
 
