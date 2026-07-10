@@ -328,9 +328,16 @@ else
     printf '\n\033[2m[claude exited cleanly (status 0) — pane kept open.]\033[0m\n'
 fi
 
-printf '\033[2m[Ctrl-D here kills the whole session (all 3 panes). Prefix+d to detach.]\033[0m\n'
+printf '\033[2m[dropping to shell. Ctrl-D leaves the shell; the session and other 2 panes stay alive. Prefix+d to detach entirely. To wipe the session: tmux kill-session -t %s]\033[0m\n' '$session'
 \${SHELL:-/bin/zsh} -l
-tmux kill-session -t '$session' 2>/dev/null || true
+printf '\n\033[2m[pane 0 shell exited. Kill entire tmux session (all 3 panes)? y/N default no]\033[0m '
+read -t 30 _kill_reply || _kill_reply=n
+if [[ "\$_kill_reply" == [yY]* ]]; then
+    tmux kill-session -t '$session' 2>/dev/null || true
+else
+    printf '\033[2m[session %s left running — tmux attach -t %s to return]\033[0m\n' '$session' '$session'
+    sleep 2
+fi
 EOSH
 )
 
