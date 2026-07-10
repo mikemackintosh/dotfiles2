@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# claude-clean — prune old claude-in-docker artifacts.
+#
+# What gets pruned:
+#   - ~/agent-work/session-*  directories older than N days
+#   - /tmp/git-review-*       directories older than N days
+#   - Docker containers matching /^claude-review-/ that are Exited or
+#     otherwise not Running
+#   - Stale entries in ~/.claude.json's `projects` map whose absolute
+#     path no longer exists on disk
+#   - Old /tmp/git-{feature,review}-{haiku,injector}-*.log files
+#   - Ephemeral staging files:
+#       /tmp/claude-in-docker.{passwd,group,claude-shim,ssh}
+#
+# Usage:
+#   claude-clean                  dry-run: show what would happen
+#   claude-clean --apply          actually prune
+#   claude-clean --older <N>      days threshold (default 14)
+#   claude-clean --all            (with --apply) ignore age threshold
+#   claude-clean --help
+
+set -uo pipefail
+
+if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
+    _B=$'\033[1m'; _D=$'\033[2m'; _R=$'\033[0m'
+    _OK=$'\033[32m'; _WARN=$'\033[33m'; _ERR=$'\033[31m'; _CYAN=$'\033[36m'
+else
+    _B='' _D='' _R='' _OK='' _WARN='' _ERR='' _CYAN=''
+fi
+
+apply=0
+older=14
+all=0
+
+while (( $# )); do
+    case $1 in
+        --apply) apply=1; shift ;;
+        --older) older=$2; shift 2 ;;
+        --older=*) older=${1#--older=}; shift ;;
+        --all)   all=1;   shift ;;
+        -h|--help)
+            sed -n '2,20p' "$0"
+            exit 0 ;;
+        *) printf "claude-clean: unknown flag %s\n" "$1" >&2; exit 2 ;;
+    esac
+done
+
+if (( all )) && ! (( apply )); then
+    echo "claude-clean: --all requires --apply (safety)" >&2
+    exit 2
+fi
+
+pruned_count=0
+would_prune_count=0
+
+# emit — one line per candidate. Fixed to avoid printf re-cycling the
+# format string when detail is empty (was producing extra blank lines).
+emit() {
+    local label=$1 target=$2 detail=${3:-}
+    local glyph color
+    if (( apply )); then glyph='✗'; color=$_ERR; pruned_count=$((pruned_count + 1))
+    else                 glyph='·'; color=$_WARN; would_prune_count=$((would_prune_count + 1)); fi
+    if [[ -n $detail ]]; then
+        printf "  ${color}${glyph}${_R} %-30s %s ${_D}(%s)${_R}\n" "$label" "$target" "$detail"
+    else
+        printf "  ${color}${glyph}${_R} %-30s %s\n" "$label" "$target"
+    fi
+}
+
+section() {
+    printf "\n${_B}${_CYAN}%s${_R}\n" "$1"
+}
+
+# --- agent-work session dirs ---
+section "agent-work session dirs older than ${older}d"
+if [[ -d $HOME/agent-work ]]; then
+    if (( all )); then find_expr=(-mindepth 1 -maxdepth 1 -type d)
+    else               find_expr=(-mindepth 1 -maxdepth 1 -type d -mtime "+${older}"); fi
+    while IFS= read -r d; do
+        [[ -z $d ]] && continue
+        mtime=$(stat -f '%Sm' -t '%Y-%m-%d' "$d" 2>/dev/null || echo "?")
+        size=$(du -sh "$d" 2>/dev/null | awk '{print $1}')
+        emit "session dir" "$d" "$mtime, $size"
+        (( apply )) && rm -rf "$d"
+    done < <(find "$HOME/agent-work" "${find_expr[@]}" 2>/dev/null)
+else
+    printf "  ${_D}(no ~/agent-work directory)${_R}\n"
+fi
+
+# --- /tmp/git-review-* dirs ---
+section "/tmp/git-review-* dirs older than ${older}d"
+if (( all )); then find_expr=(-maxdepth 1 -type d -name "git-review-*")
+else               find_expr=(-maxdepth 1 -type d -name "git-review-*" -mtime "+${older}"); fi
+while IFS= read -r d; do
+    [[ -z $d ]] && continue
+    mtime=$(stat -f '%Sm' -t '%Y-%m-%d' "$d" 2>/dev/null || echo "?")
+    size=$(du -sh "$d" 2>/dev/null | awk '{print $1}')
+    emit "review workdir" "$d" "$mtime, $size"
+    (( apply )) && rm -rf "$d"
+done < <(find /tmp "${find_expr[@]}" 2>/dev/null)
+
+# --- dangling docker containers ---
+section "docker containers matching claude-review-* (non-running)"
+if command -v docker >/dev/null 2>&1; then
+    while IFS='|' read -r name state created; do
+        [[ -z $name ]] && continue
+        # If --all, prune every non-running claude-review-*. Otherwise,
+        # only prune Exited/Created ones.
+        case $state in
+            running) continue ;;
+        esac
+        emit "container" "$name" "$state, $created"
+        (( apply )) && docker rm -f "$name" >/dev/null 2>&1
+    done < <(docker ps -a --format '{{.Names}}|{{.State}}|{{.CreatedAt}}' 2>/dev/null | grep '^claude-review-' || true)
+else
+    printf "  ${_D}(docker not on PATH)${_R}\n"
+fi
+
+# --- stale ~/.claude.json project entries ---
+section "~/.claude.json project entries whose path is gone"
+if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
+    stale=()
+    while IFS= read -r path; do
+        [[ -z $path ]] && continue
+        [[ -d $path ]] || stale+=("$path")
+    done < <(jq -r '.projects | keys[]' "$HOME/.claude.json" 2>/dev/null)
+
+    if (( ${#stale[@]} == 0 )); then
+        printf "  ${_D}(none — all project paths exist)${_R}\n"
+    else
+        for p in "${stale[@]}"; do emit "project entry" "$p"; done
+        if (( apply )); then
+            # jq-drop all stale paths in one pass.
+            paths_json=$(printf '%s\n' "${stale[@]}" | jq -R . | jq -s .)
+            tmp=$(mktemp -t claude-clean-json.XXXXXX)
+            if jq --argjson stale "$paths_json" \
+                  '.projects |= with_entries(select(.key as $k | ($stale | index($k)) | not))' \
+                  "$HOME/.claude.json" > "$tmp" \
+               && [[ -s $tmp ]]; then
+                mv "$tmp" "$HOME/.claude.json"
+            else
+                rm -f "$tmp"
+                echo "  ${_ERR}(jq merge failed — .claude.json unchanged)${_R}" >&2
+            fi
+        fi
+    fi
+else
+    printf "  ${_D}(no jq or ~/.claude.json)${_R}\n"
+fi
+
+# --- old log files ---
+section "log tempfiles older than ${older}d"
+tmpdir=${TMPDIR:-/tmp}
+if (( all )); then find_expr=(-maxdepth 1 -type f)
+else               find_expr=(-maxdepth 1 -type f -mtime "+${older}"); fi
+for pat in 'git-feature-haiku-*.log' 'git-feature-injector-*.log' 'git-review-injector-*.log' 'git-feature-prompt.*' 'git-review-prompt.*'; do
+    while IFS= read -r f; do
+        [[ -z $f ]] && continue
+        emit "log/tempfile" "$f"
+        (( apply )) && rm -f "$f"
+    done < <(find "$tmpdir" "${find_expr[@]}" -name "$pat" 2>/dev/null)
+done
+
+# --- summary ---
+section "Summary"
+if (( apply )); then
+    printf "  ${_OK}${_B}pruned %d item(s)${_R}\n" "$pruned_count"
+else
+    printf "  ${_WARN}${_B}would prune %d item(s)${_R} — rerun with ${_CYAN}--apply${_R} to actually remove\n" "$would_prune_count"
+fi

@@ -82,18 +82,46 @@ printf "${_B}claude-doctor${_R} — checking dotfiles claude-review workflow\n"
 
 # --- Host tools ---
 section "Host tools"
-for tool in docker tmux jq git bash; do
+for tool in docker tmux jq git bash fzf; do
     if command -v "$tool" >/dev/null 2>&1; then
         v=$("$tool" --version 2>&1 | head -1 | cut -c1-70)
         check "$tool" ok "$v"
     else
-        check "$tool" fail "not on \$PATH"
+        # fzf is only required for claude-attach; degrade to warning.
+        [[ $tool == fzf ]] \
+            && check "$tool" skip "claude-attach needs fzf" \
+            || check "$tool" fail "not on \$PATH"
     fi
 done
 if docker compose version >/dev/null 2>&1; then
     check "docker compose" ok "$(docker compose version --short 2>&1 | head -1)"
 else
     check "docker compose" fail "'docker compose' plugin missing"
+fi
+
+# tmux ≥ 2.7 needed for pane-border-status + reliable pane_id features.
+if command -v tmux >/dev/null 2>&1; then
+    tmux_v=$(tmux -V 2>/dev/null | awk '{print $2}' | tr -d 'a-zA-Z')
+    tmux_major=${tmux_v%%.*}
+    tmux_minor=${tmux_v#*.}
+    if (( tmux_major > 2 || (tmux_major == 2 && tmux_minor >= 7) )); then
+        check "tmux ≥ 2.7 (pane-border-status)" ok "$tmux_v"
+    else
+        check "tmux ≥ 2.7 (pane-border-status)" skip "pane titles won't render"
+    fi
+fi
+
+# \$HOME with spaces breaks a lot of shell quoting; catch it early.
+case "$HOME" in
+    *" "*) check "\$HOME free of spaces" fail "$(_redact "$HOME" '<contains space>') — will break heredoc quoting" ;;
+    *)     check "\$HOME free of spaces" ok ;;
+esac
+
+# Nested docker: are we already inside a container?
+if [[ -f /.dockerenv || -f /run/.containerenv ]]; then
+    check "not inside a container" fail "git-feature/review from inside a container isn't supported"
+else
+    check "not inside a container" ok
 fi
 
 # --- Docker daemon ---
@@ -201,7 +229,13 @@ else
     check "statusline.sh" skip "custom setup?"
 fi
 if [[ -f $HOME/.claude/.credentials.json ]]; then
-    check ".credentials.json (container OAuth token)" ok
+    # Warn if the token file hasn't been touched in > 14d — likely stale.
+    cred_age_days=$(( ($(date +%s) - $(stat -f '%m' "$HOME/.claude/.credentials.json" 2>/dev/null || echo 0)) / 86400 ))
+    if (( cred_age_days > 14 )); then
+        check ".credentials.json (container OAuth token)" skip "possibly stale (${cred_age_days}d old — re-sign in if API calls start failing)"
+    else
+        check ".credentials.json (container OAuth token)" ok "${cred_age_days}d old"
+    fi
 else
     check ".credentials.json (container OAuth token)" skip "will be created on first container sign-in"
 fi
