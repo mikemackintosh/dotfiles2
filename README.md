@@ -195,6 +195,19 @@ Both `git-review` and `git-feature` use:
   `claude-in-docker` on first use, or ahead of time with
   `docker build -t claude-review:local ~/.dotfiles/docker/claude-review/`.
 
+### `claude-doctor` — verify the setup is healthy
+
+Runs PASS/FAIL/SKIP checks across host tools, docker, 1Password, gitconfig,
+`~/.claude.json` state, dotfiles pieces, and the built image. Non-zero exit
+on any FAIL. Great to run after `install.sh` on a new machine or after a
+Docker Desktop upgrade.
+
+```sh
+claude-doctor                # redacted output (screenshot-safe)
+claude-doctor -v             # show actual values (email, registry URL)
+claude-doctor --deep         # +end-to-end tests inside a real container
+```
+
 ### `macos-defaults` — apply system preferences
 
 One-shot script that configures the Mac the way I like it: disables natural
