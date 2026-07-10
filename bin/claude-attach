@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# claude-attach — fzf-pick a claude-in-docker session and attach or
+# resume it.
+#
+# Discovers two kinds of session:
+#   1. LIVE tmux sessions (claude is either running or dropped to
+#      shell in pane 0). Enter → tmux attach.
+#   2. DEAD session dirs under ~/agent-work/session-*/ where the
+#      tmux session is gone but ~/.claude.json still has the
+#      conversation. Enter → relaunch claude-in-docker in that
+#      workdir with --continue.
+#
+# Usage:
+#   claude-attach                   fzf picker
+#   claude-attach --live-only       only show attached-or-detached tmux sessions
+#   claude-attach --dead-only       only show dead session dirs (for --continue resume)
+#   claude-attach --help
+
+set -uo pipefail
+
+if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
+    _B=$'\033[1m'; _D=$'\033[2m'; _R=$'\033[0m'
+    _OK=$'\033[32m'; _WARN=$'\033[33m'; _CYAN=$'\033[36m'
+else
+    _B='' _D='' _R='' _OK='' _WARN='' _CYAN=''
+fi
+
+live_only=0
+dead_only=0
+while (( $# )); do
+    case $1 in
+        --live-only) live_only=1; shift ;;
+        --dead-only) dead_only=1; shift ;;
+        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+        *) printf "claude-attach: unknown flag %s\n" "$1" >&2; exit 2 ;;
+    esac
+done
+
+command -v fzf >/dev/null 2>&1 || {
+    echo "claude-attach: fzf not on PATH" >&2
+    exit 1
+}
+
+# Build entries as TSV: kind\ttmux_or_dir\tworkdir\tprimary_repo\tbranch\tage
+build_entries() {
+    # Live tmux sessions.
+    if (( ! dead_only )) && command -v tmux >/dev/null 2>&1; then
+        while IFS='|' read -r name attached created; do
+            [[ -z $name ]] && continue
+            # Skip sessions we can't recognize (best-effort filter).
+            # Ours: `review-*-pr*` (git-review) or Haiku-generated names.
+            # Just include everything to be safe — user can grep.
+            local age
+            age=$(( ($(date +%s) - created) / 60 ))
+            local status="detached"
+            [[ $attached -gt 0 ]] && status="attached"
+            printf 'LIVE\t%s\t\t\t\t%s (%d min)\n' "$name" "$status" "$age"
+        done < <(tmux ls -F '#{session_name}|#{session_attached}|#{session_created}' 2>/dev/null | grep -vE '^\s*$')
+    fi
+
+    # Dead session dirs (~/agent-work/session-*).
+    if (( ! live_only )) && [[ -d $HOME/agent-work ]]; then
+        while IFS= read -r sd; do
+            [[ -z $sd ]] && continue
+            local sess_name
+            sess_name=$(basename "$sd")
+            # Skip if there's a live tmux session with a plausible link.
+            # For simplicity, don't dedupe — show both if present.
+            # Find the primary repo (heuristic: the newest .git under $sd/*/*).
+            local repo
+            repo=$(find "$sd" -mindepth 2 -maxdepth 2 -type d -name .git 2>/dev/null \
+                   | head -1 | xargs -I{} dirname {} 2>/dev/null || true)
+            [[ -z $repo || ! -d $repo/.git ]] && continue
+            local branch
+            branch=$(git -C "$repo" branch --show-current 2>/dev/null || echo "-")
+            local mtime
+            mtime=$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$sd" 2>/dev/null || echo "?")
+            printf 'DEAD\t%s\t%s\t%s\t%s\t%s\n' "$sess_name" "$repo" "$(basename "$repo")" "$branch" "$mtime"
+        done < <(find "$HOME/agent-work" -mindepth 1 -maxdepth 1 -type d -name 'session-*' 2>/dev/null | sort)
+    fi
+}
+
+entries=$(build_entries)
+if [[ -z $entries ]]; then
+    echo "claude-attach: no active tmux sessions or agent-work session dirs found"
+    exit 0
+fi
+
+# fzf preview: for LIVE, capture-pane; for DEAD, show the workdir + git log
+preview_cmd='
+  kind=$(echo {} | cut -f1)
+  name=$(echo {} | cut -f2)
+  repo=$(echo {} | cut -f3)
+  if [[ $kind == LIVE ]]; then
+      tmux capture-pane -pt "$name":0.0 -S -60 2>/dev/null | tail -60
+      echo
+      echo "--- panes ---"
+      tmux list-panes -t "$name" -F "  #{pane_id} #{pane_current_command}" 2>/dev/null
+  else
+      echo "session dir: /Users/'"$USER"'/agent-work/$name"
+      echo "primary repo: $repo"
+      echo
+      git -C "$repo" log --oneline -20 2>/dev/null
+  fi
+'
+
+selection=$(printf '%s\n' "$entries" | \
+    fzf --header='Enter=attach/resume  Ctrl-C=quit    LIVE=running tmux  DEAD=agent-work dir' \
+        --with-nth=1,2,4,5,6 --delimiter=$'\t' \
+        --preview="$preview_cmd" --preview-window=right,60%,wrap \
+        --height=60% --border --ansi)
+
+[[ -z $selection ]] && exit 0
+
+kind=$(printf '%s' "$selection" | cut -f1)
+name=$(printf '%s' "$selection" | cut -f2)
+repo=$(printf '%s' "$selection" | cut -f3)
+
+case $kind in
+    LIVE)
+        # Attach or switch depending on whether we're already in tmux
+        if [[ -n ${TMUX:-} ]]; then
+            exec tmux switch-client -t "$name"
+        else
+            exec tmux attach -t "$name"
+        fi ;;
+    DEAD)
+        if [[ ! -d $repo/.git ]]; then
+            echo "claude-attach: primary repo missing at $repo" >&2
+            exit 1
+        fi
+        printf "${_CYAN}→ Resuming claude in %s${_R} ${_D}(--continue)${_R}\n" "$repo"
+        # Set the container-name env so the container is namespaced by
+        # the session dir (matches git-feature's convention).
+        session_dir=$(dirname "$repo" | xargs dirname)   # $HOME/agent-work/session-XXXX
+        session_basename=$(basename "$session_dir")
+        export CLAUDE_REVIEW_CONTAINER_NAME="claude-review-${session_basename}"
+        # Also mount the session dir so sibling repos remain reachable.
+        export CLAUDE_REVIEW_EXTRA_MOUNTS="$session_dir"
+        exec "$HOME/.dotfiles/bin/claude-in-docker" --workdir "$repo" --continue --yolo
+        ;;
+esac

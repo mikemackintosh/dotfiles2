@@ -83,6 +83,9 @@ ${_Y}FLAGS${_R}
                             ${_D}sandbox is your safety net.${_R}
   ${_B}--model${_R} ${_M}<id>${_R}              ${_D}Model id, e.g. claude-opus-4-8.${_R}
   ${_B}--allow-dirty${_R}             ${_D}Don't refuse if working tree has uncommitted work.${_R}
+  ${_B}--resume${_R} ${_M}<session-id>${_R}     ${_D}Skip cloning; resume claude in an existing${_R}
+                            ${_D}~/agent-work/session-<id> with --continue.${_R}
+                            ${_D}Use \`claude-attach\` for interactive picker.${_R}
   ${_B}-h${_R}, ${_B}--help${_R}                ${_D}Show this help.${_R}
 
 ${_Y}EXAMPLES${_R}
@@ -108,6 +111,7 @@ interactive=1
 allow_dirty=0
 yolo=0
 model=""
+resume_session=""
 positional=()
 
 while (( $# )); do
@@ -121,12 +125,40 @@ while (( $# )); do
                                yolo=1;               shift ;;
         --model)               model=$2;             shift 2 ;;
         --model=*)             model=${1#--model=};  shift ;;
+        --resume)              resume_session=${2:-}; shift 2 ;;
+        --resume=*)            resume_session=${1#--resume=}; shift ;;
         -h|--help)             usage; exit 0 ;;
         --) shift; positional+=("$@"); break ;;
         -*)  echo "git-feature: unknown flag $1" >&2; exit 2 ;;
         *)   positional+=("$1"); shift ;;
     esac
 done
+
+# --resume mode: pick a previous session_dir and relaunch claude with
+# --continue instead of cloning fresh. If no session id passed, delegate
+# to claude-attach for fzf picking.
+if [[ -n $resume_session ]]; then
+    if [[ $resume_session == session-* && -d $HOME/agent-work/$resume_session ]]; then
+        _resume_dir="$HOME/agent-work/$resume_session"
+    elif [[ -d $resume_session ]]; then
+        _resume_dir=$resume_session
+    else
+        echo "git-feature: no session dir matching '$resume_session' under ~/agent-work/" >&2
+        exit 1
+    fi
+    _resume_repo=$(find "$_resume_dir" -mindepth 2 -maxdepth 2 -type d -name .git 2>/dev/null | head -1 | xargs -I{} dirname {} 2>/dev/null)
+    if [[ -z $_resume_repo || ! -d $_resume_repo/.git ]]; then
+        echo "git-feature: no repo found under $_resume_dir" >&2
+        exit 1
+    fi
+    echo "→ Resuming session $(basename "$_resume_dir") at $_resume_repo"
+    export CLAUDE_REVIEW_CONTAINER_NAME="claude-review-$(basename "$_resume_dir")"
+    export CLAUDE_REVIEW_EXTRA_MOUNTS="$_resume_dir"
+    args=(--workdir "$_resume_repo" --continue)
+    [[ -n $model ]] && args+=(--model "$model")
+    (( yolo )) && args+=(--yolo)
+    exec "$HOME/.dotfiles/bin/claude-in-docker" "${args[@]}"
+fi
 
 # parse_owner_repo <spec> → sets globals _spec_owner / _spec_name (empty
 # on no match). Accepts full github URL or bare owner/repo shorthand.
@@ -182,6 +214,13 @@ clone_into_session() {
     local ref
     ref=$(find_local_reference "$owner" "$name")
 
+    # -c url."<url>".insteadof= disables any host-level insteadOf
+    # rewrite for github URLs (e.g. `gh:` shorthand, or an SSH↔HTTPS
+    # coercion in ~/.gitconfig). Ensures our explicit clone URL is
+    # honored verbatim.
+    local nogitcfg=(-c "url.https://github.com/.insteadOf=" \
+                    -c "url.git@github.com:.insteadOf=")
+
     local one_p_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
     local clone_url how
     if [[ -S $one_p_sock ]]; then
@@ -201,13 +240,13 @@ clone_into_session() {
         # removes the .git/objects/info/alternates file. Without it,
         # git ops inside the container fail because the reference
         # path ($HOME/go/src/…) isn't mounted in the container.
-        if ! git clone --quiet --reference-if-able "$ref" --dissociate "$clone_url" "$target"; then
+        if ! git "${nogitcfg[@]}" clone --quiet --reference-if-able "$ref" --dissociate "$clone_url" "$target"; then
             rm -rf "$target"
             return 1
         fi
     else
         echo "→ Cloning $owner/$name → $target ($how; depth=100)" >&2
-        if ! git clone --quiet --depth 100 "$clone_url" "$target"; then
+        if ! git "${nogitcfg[@]}" clone --quiet --depth 100 "$clone_url" "$target"; then
             rm -rf "$target"
             return 1
         fi
@@ -223,6 +262,22 @@ clone_into_session() {
 #         spec is URL / owner-repo → clone into ~/agent-work/, dirty check skipped
 in_place=1
 session_dir=""   # populated in session-clone mode below
+_handoff_done=0  # flipped to 1 right before `exec tmux attach`
+
+# Trap: if we bail before handing off to tmux (Ctrl-C during clone,
+# Haiku error, dirty-tree refusal, etc.), remove the half-populated
+# session_dir so ~/agent-work doesn't collect orphans.
+_git_feature_cleanup() {
+    local ec=$?
+    trap - EXIT INT TERM
+    if (( _handoff_done == 0 )) && [[ -n ${session_dir:-} && -d $session_dir ]]; then
+        printf '\n\033[2m[cleaning up partial session_dir %s]\033[0m\n' "$session_dir" >&2
+        rm -rf "$session_dir"
+    fi
+    exit "$ec"
+}
+trap _git_feature_cleanup EXIT INT TERM
+
 case ${#positional[@]} in
     1) repo=$(pwd); desc=${positional[0]} ;;
     2)
@@ -559,6 +614,10 @@ if [[ \$_ec -ne 0 ]]; then
     # --continue resumes exactly where we died.
     printf '\n\033[33m╔═════════════════════════════════════════════════════════════╗\033[0m\n'
     printf '\033[33m║\033[0m \033[1mclaude exited with status %-3s\033[0m %36s \033[33m║\033[0m\n' "\$_ec" ""
+    if [[ \$_ec -eq 137 ]]; then
+        printf '\033[33m║\033[0m \033[31mLikely container OOM (SIGKILL 137). Check Docker Desktop\033[0m       \033[33m║\033[0m\n'
+        printf '\033[33m║\033[0m \033[31m→ Settings → Resources → Memory (bump higher and rerun).\033[0m      \033[33m║\033[0m\n'
+    fi
     printf '\033[33m║\033[0m \033[2mPlan is preserved in ~/.claude/projects/ (\`claude --continue\` resumes)\033[0m \033[33m║\033[0m\n'
     printf '\033[33m╚═════════════════════════════════════════════════════════════╝\033[0m\n'
     printf '  [\033[1mR\033[0m] Restart with --continue (resume plan)\n'
@@ -637,13 +696,17 @@ else
     container_shell_cmd="cd '$repo' && printf '\033[2m[--no-docker: no container to exec into; host shell in workdir]\033[0m\n' && exec \${SHELL:-/bin/zsh} -l"
 fi
 
-# Paper-trail before we hand off.
+# Paper-trail before we hand off. Injector + haiku log paths included
+# so if the prompt never lands in pane 0 (or the slug looks wrong),
+# you can `cat` those files to see exactly what happened.
 cat <<EOF
-→ tmux session:    $session
-→ Container name:  $container_name
-→ Reattach:        tmux attach -t $session
-→ Peek read-only:  tmux attach -r -t $session
-→ Haiku debug log: $HAIKU_LOG
+→ tmux session:       $session
+→ Container name:     $container_name
+→ Session dir:        ${session_dir:-<in-place>}
+→ Reattach:           tmux attach -t $session
+→ Peek read-only:     tmux attach -r -t $session
+→ Haiku debug log:    $HAIKU_LOG
+→ Injector debug log: $injector_log
 EOF
 
 # Build the three-pane session. We use pane IDs (`%N`) rather than
@@ -732,6 +795,9 @@ rm -f "$prompt_path" "\$0"
 INJECTOR_EOF
 
 tmux run-shell -b "$injector_path"
+
+# Handoff complete — cleanup trap should NOT fire beyond this point.
+_handoff_done=1
 
 if [[ -z "${TMUX:-}" ]]; then
     exec tmux attach -t "$session"

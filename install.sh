@@ -151,7 +151,8 @@ chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
          "$DOTFILES/bin/now-playing" "$DOTFILES/bin/airpods-battery" \
          "$DOTFILES/bin/tmux-status-right" "$DOTFILES/bin/docker-shim" \
          "$DOTFILES/bin/claude-in-docker" "$DOTFILES/bin/gen-compose-override" \
-         "$DOTFILES/bin/claude-doctor" \
+         "$DOTFILES/bin/claude-doctor" "$DOTFILES/bin/claude-clean" \
+         "$DOTFILES/bin/claude-attach" \
          "$DOTFILES/docker/claude-review/cc-status-stub" \
          "$DOTFILES/githooks/pre-push" "$DOTFILES/githooks/pre-commit"
 

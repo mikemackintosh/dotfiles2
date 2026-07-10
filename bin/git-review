@@ -135,8 +135,26 @@ EOF
 fi
 
 workdir=$(mktemp -d "/tmp/git-review-${repo}-${pr}.XXXXXX")
+
+# Cleanup partial workdir if we bail before handing off to tmux.
+_handoff_done=0
+_git_review_cleanup() {
+    local ec=$?
+    trap - EXIT INT TERM
+    if (( _handoff_done == 0 )) && [[ -d $workdir ]]; then
+        rm -rf "$workdir"
+    fi
+    exit "$ec"
+}
+trap _git_review_cleanup EXIT INT TERM
+
+# -c url....insteadOf= disables any host-level rewrite (gh:, ssh
+# coercion) so our explicit HTTPS URL is honored verbatim.
+nogitcfg=(-c "url.https://github.com/.insteadOf=" \
+          -c "url.git@github.com:.insteadOf=")
+
 echo "→ Cloning $owner/$repo (shallow) into $workdir"
-git clone --depth=1 "https://github.com/$owner/$repo.git" "$workdir" >/dev/null 2>&1 \
+git "${nogitcfg[@]}" clone --depth=1 "https://github.com/$owner/$repo.git" "$workdir" >/dev/null 2>&1 \
     || { echo "clone failed" >&2; exit 1; }
 
 echo "→ Fetching PR #$pr"
@@ -314,6 +332,10 @@ tmux refresh-client 2>/dev/null || true
 if [[ \$_ec -ne 0 ]]; then
     printf '\n\033[33m╔═════════════════════════════════════════════════════════════╗\033[0m\n'
     printf '\033[33m║\033[0m \033[1mclaude exited with status %-3s\033[0m %36s \033[33m║\033[0m\n' "\$_ec" ""
+    if [[ \$_ec -eq 137 ]]; then
+        printf '\033[33m║\033[0m \033[31mLikely container OOM (SIGKILL 137). Check Docker Desktop\033[0m       \033[33m║\033[0m\n'
+        printf '\033[33m║\033[0m \033[31m→ Settings → Resources → Memory (bump higher and rerun).\033[0m      \033[33m║\033[0m\n'
+    fi
     printf '\033[33m║\033[0m \033[2mPlan is preserved in ~/.claude/projects/ (\`claude --continue\` resumes)\033[0m \033[33m║\033[0m\n'
     printf '\033[33m╚═════════════════════════════════════════════════════════════╝\033[0m\n'
     printf '  [\033[1mR\033[0m] Restart with --continue (resume review)\n'
@@ -444,6 +466,8 @@ rm -f "$prompt_path" "\$0"
 INJECTOR_EOF
 
 tmux run-shell -b "$injector_path"
+
+_handoff_done=1
 
 if [[ -z "${TMUX:-}" ]]; then
     exec tmux attach -t "$session"
