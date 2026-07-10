@@ -254,9 +254,12 @@ if tmux has-session -t "$session" 2>/dev/null; then
     session="${session}-$$"
 fi
 
-# Container name uses the workdir basename (which includes mktemp's
-# random suffix), guaranteeing uniqueness per invocation.
-container_name="claude-review-$(basename "$workdir")"
+# Container name includes the workdir basename (which has mktemp's
+# random suffix) AND git-review's PID. The PID is belt-and-suspenders
+# against any race where two invocations pick the same suffix, and
+# guarantees `claude-in-docker`'s safety-reap (`docker rm -f`) can
+# never target another live session's container.
+container_name="claude-review-$(basename "$workdir")-$$"
 export CLAUDE_REVIEW_CONTAINER_NAME=$container_name
 
 # inner_cmd — no positional prompt (tmux paste-buffer handles that).
@@ -264,10 +267,12 @@ if [[ -x "$HOME/.dotfiles/bin/claude-in-docker" ]]; then
     inner_cmd="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$workdir'"
     [[ -n $model ]] && inner_cmd+=" --model '$model'"
     (( yolo )) && inner_cmd+=" --yolo"
+    restart_cmd="$inner_cmd --continue"
 else
     inner_cmd="claude"
     [[ -n $model ]] && inner_cmd+=" --model '$model'"
     (( yolo )) && inner_cmd+=" --dangerously-skip-permissions"
+    restart_cmd="$inner_cmd --continue"
 fi
 
 # Pane 0 launcher: keeps pane alive after claude exits, resets terminal
@@ -275,8 +280,28 @@ fi
 launch_cmd=$(cat <<EOSH
 { $inner_cmd; }
 _ec=\$?
-printf '\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?2004l'
-printf '\n\033[2m[claude exited with status %s — pane kept open. Ctrl-D here kills the whole session (all 3 panes). Prefix+d to detach without killing.]\033[0m\n' "\$_ec"
+printf '\033[?9l\033[?1000l\033[?1001l\033[?1002l\033[?1003l\033[?1004l\033[?1005l\033[?1006l\033[?1015l\033[?1016l\033[?2004l\033[?25h'
+stty sane 2>/dev/null || true
+tmux refresh-client 2>/dev/null || true
+
+if [[ \$_ec -ne 0 ]]; then
+    printf '\n\033[33m╔═════════════════════════════════════════════════════════════╗\033[0m\n'
+    printf '\033[33m║\033[0m \033[1mclaude exited with status %-3s\033[0m %36s \033[33m║\033[0m\n' "\$_ec" ""
+    printf '\033[33m║\033[0m \033[2mPlan is preserved in ~/.claude/projects/ (\`claude --continue\` resumes)\033[0m \033[33m║\033[0m\n'
+    printf '\033[33m╚═════════════════════════════════════════════════════════════╝\033[0m\n'
+    printf '  [\033[1mR\033[0m] Restart with --continue (resume review)\n'
+    printf '  [\033[1mS\033[0m] Drop to shell (Ctrl-D closes session)\n'
+    printf '\033[36m> \033[0m'
+    read _reply || _reply=s
+    if [[ "\$_reply" == [rR]* ]]; then
+        printf '\033[2m→ restarting claude with --continue…\033[0m\n'
+        exec $restart_cmd
+    fi
+else
+    printf '\n\033[2m[claude exited cleanly (status 0) — pane kept open.]\033[0m\n'
+fi
+
+printf '\033[2m[Ctrl-D here kills the whole session (all 3 panes). Prefix+d to detach.]\033[0m\n'
 \${SHELL:-/bin/zsh} -l
 tmux kill-session -t '$session' 2>/dev/null || true
 EOSH

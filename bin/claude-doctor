@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+# claude-doctor — verify the containerized claude-review stack is healthy.
+# Runs a series of PASS/FAIL/SKIP checks and exits non-zero on any FAIL.
+#
+# Usage:
+#   claude-doctor            # standard checks
+#   claude-doctor --deep     # also run end-to-end container tests
+#   claude-doctor --help
+
+set -uo pipefail
+
+if [[ -t 1 && -z ${NO_COLOR:-} ]]; then
+    _B=$'\033[1m'; _D=$'\033[2m'; _R=$'\033[0m'
+    _OK=$'\033[32m'; _WARN=$'\033[33m'; _ERR=$'\033[31m'; _CYAN=$'\033[36m'
+else
+    _B='' _D='' _R='' _OK='' _WARN='' _ERR='' _CYAN=''
+fi
+
+deep=0
+verbose=0
+while (( $# )); do
+    case $1 in
+        --deep) deep=1; shift ;;
+        -v|--verbose) verbose=1; shift ;;
+        -h|--help)
+            cat <<EOF
+${_B}claude-doctor${_R} ${_D}— sanity-check the containerized claude review setup${_R}
+
+Runs PASS/FAIL/SKIP checks across host tools, docker, 1Password,
+gitconfig chain, ~/.claude.json state, dotfiles pieces, and the
+built image. Exits non-zero on any FAIL.
+
+${_B}Usage${_R}
+  claude-doctor              standard checks (~1s), redacted output
+  claude-doctor -v           verbose: show actual values (email,
+                             registry URL, signingkey) — screenshot
+                             with care
+  claude-doctor --deep       also run end-to-end tests inside a real
+                             container (docker.sock access, 1P agent
+                             reachability, signing) — ~5-10s extra
+  claude-doctor --help
+EOF
+            exit 0 ;;
+        *) printf "claude-doctor: unknown flag %s\n" "$1" >&2; exit 2 ;;
+    esac
+done
+
+# Redact a potentially-sensitive value unless --verbose. Returns the
+# literal string "set" if we'd otherwise leak, or the value with -v.
+_redact() {
+    # ${2-set}: default only when arg is unset. Passing "" as $2 keeps
+    # the mask empty (skip the detail entirely instead of printing "set").
+    local val=$1 masked=${2-set}
+    if (( verbose )); then printf '%s' "$val"; else printf '%s' "$masked"; fi
+}
+
+pass=0 fail=0 skip=0
+
+check() {
+    local label=$1 status=$2 detail=${3:-}
+    case $status in
+        ok)   pass=$((pass + 1))
+              printf "  ${_OK}✓${_R} %s" "$label"
+              [[ -n $detail ]] && printf " ${_D}%s${_R}" "$detail"
+              printf "\n" ;;
+        fail) fail=$((fail + 1))
+              printf "  ${_ERR}✗${_R} %s" "$label"
+              [[ -n $detail ]] && printf " ${_D}— %s${_R}" "$detail"
+              printf "\n" ;;
+        skip) skip=$((skip + 1))
+              printf "  ${_WARN}·${_R} %s ${_D}[skip]${_R}" "$label"
+              [[ -n $detail ]] && printf " ${_D}%s${_R}" "$detail"
+              printf "\n" ;;
+    esac
+}
+
+section() {
+    printf "\n${_B}${_CYAN}%s${_R}\n" "$1"
+}
+
+printf "${_B}claude-doctor${_R} — checking dotfiles claude-review workflow\n"
+
+# --- Host tools ---
+section "Host tools"
+for tool in docker tmux jq git bash; do
+    if command -v "$tool" >/dev/null 2>&1; then
+        v=$("$tool" --version 2>&1 | head -1 | cut -c1-70)
+        check "$tool" ok "$v"
+    else
+        check "$tool" fail "not on \$PATH"
+    fi
+done
+if docker compose version >/dev/null 2>&1; then
+    check "docker compose" ok "$(docker compose version --short 2>&1 | head -1)"
+else
+    check "docker compose" fail "'docker compose' plugin missing"
+fi
+
+# --- Docker daemon ---
+section "Docker daemon"
+if docker info >/dev/null 2>&1; then
+    check "daemon reachable" ok
+    sock=/var/run/docker.sock
+    if [[ -S $sock ]]; then
+        check "$sock present" ok "$(stat -f '%Sp %Su:%Sg' "$sock" 2>/dev/null)"
+    else
+        check "$sock present" skip "custom socket path?"
+    fi
+else
+    check "daemon reachable" fail "start Docker Desktop"
+fi
+
+# --- 1Password SSH agent ---
+section "1Password SSH agent"
+one_p_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+if [[ -S $one_p_sock ]]; then
+    check "socket present" ok
+    if SSH_AUTH_SOCK="$one_p_sock" ssh-add -l >/dev/null 2>&1; then
+        n=$(SSH_AUTH_SOCK="$one_p_sock" ssh-add -l 2>/dev/null | wc -l | tr -d ' ')
+        check "agent responds" ok "$n key(s) loaded"
+    else
+        check "agent responds" fail "1P → Developer → enable SSH agent"
+    fi
+else
+    check "socket present" skip "1P not running or SSH agent disabled"
+fi
+# Warn if ~/.ssh/config's IdentityAgent line matches the 1P path
+if [[ -f $HOME/.ssh/config ]]; then
+    if grep -qE '^\s*IdentityAgent.*1password' "$HOME/.ssh/config"; then
+        check "~/.ssh/config IdentityAgent → 1P" ok
+    else
+        check "~/.ssh/config IdentityAgent → 1P" skip "no IdentityAgent 1P line"
+    fi
+fi
+
+# --- Git identity ---
+section "Git identity"
+if [[ -f $HOME/.gitconfig ]]; then
+    check "~/.gitconfig" ok
+else
+    check "~/.gitconfig" fail "run ./install.sh"
+fi
+[[ -d $HOME/.private ]] \
+    && check "~/.private/" ok \
+    || check "~/.private/" skip "identity include missing"
+# The user may rely on [includeIf]-conditional gitconfig, so identity
+# at --global might be empty while cwd-conditional includes fill it in.
+# Try global first, then look for user.email/name inside ~/.private/.
+u=$(git config --global user.name 2>/dev/null || true)
+e=$(git config --global user.email 2>/dev/null || true)
+if [[ -n $u && -n $e ]]; then
+    check "user.name + user.email set" ok "$(_redact "$u <$e>")"
+elif [[ -f $HOME/.private/gitconfig ]] && grep -qE '^\s*(email|name)\s*=' "$HOME/.private/gitconfig"; then
+    check "user.name + user.email set" ok "$(_redact 'in ~/.private/gitconfig' 'via [includeIf]')"
+else
+    check "user.name + user.email set" fail "set in ~/.private/gitconfig"
+fi
+fmt=$(git config --global gpg.format 2>/dev/null || true)
+sk=$(git config --global user.signingkey 2>/dev/null | head -c 40 || true)
+if [[ $fmt == ssh && -n $sk ]]; then
+    check "SSH commit signing config" ok "$(_redact "format=ssh, key=${sk}…" 'format=ssh')"
+elif [[ -f $HOME/.private/gitconfig ]] && grep -qE '^\s*signingkey\s*=' "$HOME/.private/gitconfig"; then
+    check "SSH commit signing config" ok "in ~/.private/gitconfig"
+else
+    check "SSH commit signing config" skip "signing not configured"
+fi
+
+# --- Claude Code state ---
+section "Claude Code state"
+if command -v claude >/dev/null 2>&1; then
+    check "claude on \$PATH (host)" ok "$(claude --version 2>/dev/null | head -1)"
+else
+    check "claude on \$PATH (host)" skip "container-only setup?"
+fi
+if [[ -f $HOME/.claude.json ]]; then
+    if jq -e . "$HOME/.claude.json" >/dev/null 2>&1; then
+        check "~/.claude.json valid JSON" ok
+        acct=$(jq -r '.oauthAccount.emailAddress // empty' "$HOME/.claude.json" 2>/dev/null)
+        [[ -n $acct ]] \
+            && check "oauthAccount configured" ok "$(_redact "$acct" '')" \
+            || check "oauthAccount configured" fail "sign in via 'claude' on host once"
+    else
+        check "~/.claude.json valid JSON" fail
+    fi
+else
+    check "~/.claude.json exists" fail "run 'claude' on host to init"
+fi
+if [[ -f $HOME/.claude/settings.json ]]; then
+    check "~/.claude/settings.json" ok
+fi
+if [[ -e $HOME/.claude/statusline.sh ]]; then
+    tgt=$(readlink "$HOME/.claude/statusline.sh" 2>/dev/null || echo "")
+    if [[ -n $tgt && -f $tgt ]]; then
+        check "statusline.sh symlink → $tgt" ok
+    elif [[ -n $tgt ]]; then
+        check "statusline.sh symlink target reachable" fail "$tgt missing"
+    else
+        check "statusline.sh (regular file)" ok
+    fi
+else
+    check "statusline.sh" skip "custom setup?"
+fi
+if [[ -f $HOME/.claude/.credentials.json ]]; then
+    check ".credentials.json (container OAuth token)" ok
+else
+    check ".credentials.json (container OAuth token)" skip "will be created on first container sign-in"
+fi
+
+# --- Private npm registry ---
+section "Private npm registry"
+if [[ -f $HOME/.npmrc ]]; then
+    if grep -qE "^\s*registry\s*=\s*https?://" "$HOME/.npmrc" 2>/dev/null; then
+        reg=$(awk -F= '/^registry\s*=/ {gsub(/^ +| +$/,"",$2); print $2; exit}' "$HOME/.npmrc")
+        check "~/.npmrc registry" ok "$(_redact "$reg" 'custom registry set')"
+    else
+        check "~/.npmrc present (default registry)" ok
+    fi
+else
+    check "~/.npmrc" skip "no private registry needed"
+fi
+
+# --- Dotfiles pieces ---
+section "Dotfiles pieces"
+DOT=${DOTFILES:-$HOME/.dotfiles}
+for f in bin/claude-in-docker bin/gen-compose-override bin/git-feature bin/git-review docker/claude-review/cc-status-stub; do
+    [[ -x $DOT/$f ]] \
+        && check "$f executable" ok \
+        || check "$f executable" fail
+done
+[[ -f $DOT/docker/claude-review/Dockerfile ]] \
+    && check "Dockerfile present" ok \
+    || check "Dockerfile present" fail
+for p in claude/prompts/review.md claude/prompts/make-pr.md docs/git-review.md docs/git-feature.md; do
+    [[ -f $DOT/$p ]] \
+        && check "$p present" ok \
+        || check "$p present" fail
+done
+
+# --- Container image ---
+section "Container image"
+IMAGE="${CLAUDE_REVIEW_IMAGE:-claude-review:local}"
+if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    check "$IMAGE built" ok
+    if v=$(docker run --rm --entrypoint /bin/sh "$IMAGE" -c "claude --version" 2>&1); then
+        check "claude inside image" ok "$v"
+    else
+        check "claude inside image" fail "$v"
+    fi
+    for bin in git docker jq python3 ssh-keygen bash; do
+        if docker run --rm --entrypoint /bin/sh "$IMAGE" -c "command -v $bin" >/dev/null 2>&1; then
+            check "$bin in image" ok
+        else
+            check "$bin in image" fail
+        fi
+    done
+else
+    check "$IMAGE built" skip "will build lazily on first run — or 'docker build -t $IMAGE $DOT/docker/claude-review/'"
+fi
+
+# --- Deep end-to-end checks ---
+if (( deep )); then
+    section "End-to-end (--deep)"
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        check "image required for deep checks" skip
+    else
+        # docker.sock accessible from inside as our uid+group-0
+        if docker run --rm \
+                -u "$(id -u):$(id -g)" --group-add 0 \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                --entrypoint /bin/sh "$IMAGE" \
+                -c "docker version >/dev/null 2>&1" \
+                >/dev/null 2>&1; then
+            check "docker.sock reachable in container" ok
+        else
+            check "docker.sock reachable in container" fail "--group-add 0 not working?"
+        fi
+
+        # 1P agent forwarding
+        if [[ -S $one_p_sock ]]; then
+            if docker run --rm \
+                    -u "$(id -u):$(id -g)" --group-add 0 \
+                    -v "$one_p_sock:$one_p_sock" \
+                    -e "SSH_AUTH_SOCK=$one_p_sock" \
+                    --entrypoint /bin/sh "$IMAGE" \
+                    -c "ssh-add -l >/dev/null 2>&1" \
+                    >/dev/null 2>&1; then
+                check "1P agent reachable in container" ok
+            else
+                check "1P agent reachable in container" fail "Docker Desktop file sharing / 1P perms?"
+            fi
+        fi
+
+        # ~/.dotfiles/claude mount → statusline symlink resolves
+        if [[ -L $HOME/.claude/statusline.sh ]]; then
+            tgt=$(readlink "$HOME/.claude/statusline.sh")
+            if docker run --rm \
+                    -u "$(id -u):$(id -g)" \
+                    -v "$HOME/.claude:$HOME/.claude:ro" \
+                    -v "$HOME/.dotfiles/claude:$HOME/.dotfiles/claude:ro" \
+                    -e "HOME=$HOME" \
+                    --entrypoint /bin/sh "$IMAGE" \
+                    -c "test -x $HOME/.claude/statusline.sh" \
+                    >/dev/null 2>&1; then
+                check "statusline symlink resolves in container" ok
+            else
+                check "statusline symlink resolves in container" fail "target not mounted"
+            fi
+        fi
+    fi
+fi
+
+# --- Summary ---
+section "Summary"
+total=$((pass + fail + skip))
+printf "  %d passed, %d failed, %d skipped ${_D}(of %d checks)${_R}\n" "$pass" "$fail" "$skip" "$total"
+if (( fail == 0 )); then
+    printf "  ${_OK}${_B}all healthy${_R}\n"
+    exit 0
+else
+    printf "  ${_ERR}${_B}%d check(s) failed${_R} — see items marked ${_ERR}✗${_R} above\n" "$fail"
+    exit 1
+fi
