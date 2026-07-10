@@ -103,7 +103,7 @@ dot_plugins=(
     "keybind"
     "kube"
     "private"
-
+    "zupershell"
     "prompt"
     "fzf-widgets"
 )

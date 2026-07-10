@@ -72,7 +72,6 @@
   # Global hooks (currently: gitleaks pre-push). Overrides per-repo
   # .git/hooks — repos that need their own can opt out with:
   #   git config --local core.hooksPath .git/hooks
-  hooksPath = ~/.dotfiles/githooks
 
 [interactive]
   diffFilter = delta --color-only --features=interactive

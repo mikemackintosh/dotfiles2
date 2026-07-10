@@ -1,51 +1,71 @@
-#!/usr/bin/env bash
-# pre-commit — Go hygiene on staged files.
-#
-# Runs gofmt -l (format check, no rewrite) and go vet against the
-# packages containing the staged .go files. Skips silently if no Go
-# files are staged or if the toolchain isn't installed.
-#
-# Wired in globally via core.hooksPath in ~/.dotfiles/.gitconfig.
-# Bypass once:   git commit --no-verify
+#!/bin/sh
 
-set -uo pipefail
+if [ "$LEFTHOOK_VERBOSE" = "1" -o "$LEFTHOOK_VERBOSE" = "true" ]; then
+  set -x
+fi
 
-mapfile -t staged_go < <(git diff --cached --name-only --diff-filter=ACM 2>/dev/null \
-                        | grep -E '\.go$' || true)
-[[ ${#staged_go[@]} -eq 0 ]] && exit 0
+if [ "$LEFTHOOK" = "0" ]; then
+  exit 0
+fi
 
-fail=0
-
-# gofmt — format check only; don't auto-write into the index.
-if command -v gofmt >/dev/null 2>&1; then
-    unformatted=$(gofmt -l "${staged_go[@]}" 2>/dev/null || true)
-    if [[ -n $unformatted ]]; then
-        echo "pre-commit: gofmt failures in staged files:" >&2
-        echo "$unformatted" | sed 's/^/    /' >&2
-        echo "  Fix: gofmt -w ${staged_go[*]}" >&2
-        fail=1
+call_lefthook()
+{
+  if test -n "$LEFTHOOK_BIN"
+  then
+    "$LEFTHOOK_BIN" "$@"
+  elif lefthook -h >/dev/null 2>&1
+  then
+    lefthook "$@"
+  elif /opt/homebrew/bin//lefthook -h >/dev/null 2>&1
+  then
+    /opt/homebrew/bin//lefthook "$@"
+  else
+    dir="$(git rev-parse --show-toplevel)"
+    osArch=$(uname | tr '[:upper:]' '[:lower:]')
+    cpuArch=$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x64/')
+    if test -f "$dir/node_modules/lefthook-${osArch}-${cpuArch}/bin/lefthook"
+    then
+      "$dir/node_modules/lefthook-${osArch}-${cpuArch}/bin/lefthook" "$@"
+    elif test -f "$dir/node_modules/@evilmartians/lefthook/bin/lefthook-${osArch}-${cpuArch}/lefthook"
+    then
+      "$dir/node_modules/@evilmartians/lefthook/bin/lefthook-${osArch}-${cpuArch}/lefthook" "$@"
+    elif test -f "$dir/node_modules/@evilmartians/lefthook-installer/bin/lefthook"
+    then
+      "$dir/node_modules/@evilmartians/lefthook-installer/bin/lefthook" "$@"
+    elif test -f "$dir/node_modules/lefthook/bin/index.js"
+    then
+      "$dir/node_modules/lefthook/bin/index.js" "$@"
+    elif go tool lefthook -h >/dev/null 2>&1
+    then
+      go tool lefthook "$@"
+    elif bundle exec lefthook -h >/dev/null 2>&1
+    then
+      bundle exec lefthook "$@"
+    elif yarn lefthook -h >/dev/null 2>&1
+    then
+      yarn lefthook "$@"
+    elif pnpm lefthook -h >/dev/null 2>&1
+    then
+      pnpm lefthook "$@"
+    elif swift package lefthook >/dev/null 2>&1
+    then
+      swift package --build-path .build/lefthook --disable-sandbox lefthook "$@"
+    elif command -v mint >/dev/null 2>&1
+    then
+      mint run csjones/lefthook-plugin "$@"
+    elif uv run lefthook -h >/dev/null 2>&1
+    then
+      uv run lefthook "$@"
+    elif mise exec -- lefthook -h >/dev/null 2>&1
+    then
+      mise exec -- lefthook "$@"
+    elif devbox run lefthook -h >/dev/null 2>&1
+    then
+      devbox run lefthook "$@"
+    else
+      echo "Can't find lefthook in PATH"
     fi
-fi
+  fi
+}
 
-# go vet — only run when inside a Go module, and only on packages
-# that contain staged files (avoids vetting the whole tree).
-if command -v go >/dev/null 2>&1; then
-    gomod=$(go env GOMOD 2>/dev/null || true)
-    if [[ -n $gomod && $gomod != "/dev/null" && $gomod != "off" ]]; then
-        mapfile -t pkgs < <(printf '%s\n' "${staged_go[@]}" \
-                            | xargs -n1 dirname \
-                            | sort -u \
-                            | sed 's|^|./|')
-        if ! go vet "${pkgs[@]}" 2>&1; then
-            echo "pre-commit: go vet failed" >&2
-            fail=1
-        fi
-    fi
-fi
-
-if (( fail )); then
-    echo >&2
-    echo "Bypass once: git commit --no-verify" >&2
-    exit 1
-fi
-exit 0
+call_lefthook run "pre-commit" "$@"

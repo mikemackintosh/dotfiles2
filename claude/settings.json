@@ -1,12 +1,30 @@
 {
-  "theme": "dark",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"mcplocker memory: This session can use the mcplocker MCP memory tools (mcp__mcplocker__memory_recall, mcp__mcplocker__memory_save, mcp__mcplocker__memory_search, mcp__mcplocker__memory_forget), which are deferred behind ToolSearch. At the start of a task, call memory_recall to pull relevant prior context. When you learn a durable fact about the user or their work, call memory_save. Use memory_search for lookups. ToolSearch for these tool names first if their schemas are not loaded.\"}}'"
+          }
+        ]
+      }
+    ]
+  },
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
     "padding": 1
   },
+  "enabledPlugins": {
+    "gopls-lsp@claude-plugins-official": true,
+    "swift-lsp@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {},
+  "theme": "dark",
   "deny": [
     "Bash(gh)",
     "Bash(gh *)"
-  ]
+  ],
+  "skipWorkflowUsageWarning": true
 }
