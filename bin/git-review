@@ -184,19 +184,46 @@ prompt_path=$(mktemp -t git-review-prompt.XXXXXX)
     echo "PR under review: $pr_url  (REVIEW_MODE=$mode, INTERACTIVE=$interactive)"
 } > "$prompt_path"
 
-# Pre-populate ~/.claude.json for this workdir so claude doesn't prompt
-# for trust / MCP approval every run. Each /tmp/git-review-* path is
-# new, so per-project state doesn't carry over unless we write it here.
+# Owner scope for adjacent-repo access. git-review's workdir is under
+# /tmp/, so we pull the owner from the PR URL and mount the canonical
+# ~/go/src/github.com/<owner>/ if it exists.
+adjacent_dirs=()
+_canonical_owner_dir="$HOME/go/src/github.com/$owner"
+[[ -d $_canonical_owner_dir ]] && adjacent_dirs+=("$_canonical_owner_dir")
+
+if (( ${#adjacent_dirs[@]} > 0 )); then
+    _joined=""
+    for d in "${adjacent_dirs[@]}"; do
+        [[ -n $_joined ]] && _joined+=":"
+        _joined+="$d"
+    done
+    export CLAUDE_REVIEW_EXTRA_MOUNTS=$_joined
+    echo "→ Adjacent repo scope: ${adjacent_dirs[*]}"
+fi
+
+# Pre-populate ~/.claude.json for the workdir AND every sibling repo
+# under the owner's canonical dir, so cross-repo writes (fix-mode
+# stacked PRs to sibling repos, comparing against sibling code, etc.)
+# don't trip the auto-mode permission classifier.
 if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
     mcp_servers_json='[]'
     if [[ -f $workdir/.mcp.json ]]; then
         mcp_servers_json=$(jq -c '(.mcpServers // {}) | keys' "$workdir/.mcp.json" 2>/dev/null || echo '[]')
     fi
-    echo "→ Pre-approving trust + MCP for $workdir"
+
+    trusted_paths=("$workdir")
+    for d in "${adjacent_dirs[@]}"; do
+        while IFS= read -r sub; do
+            [[ -n $sub && -d $sub/.git ]] && trusted_paths+=("$sub")
+        done < <(find "$d" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+    done
+
+    echo "→ Pre-approving trust + MCP for ${#trusted_paths[@]} path(s)"
     tmp_claude=$(mktemp -t claude-json.XXXXXX)
-    if jq --arg dir "$workdir" \
+    trust_paths_json=$(printf '%s\n' "${trusted_paths[@]}" | jq -R . | jq -s .)
+    if jq --argjson dirs "$trust_paths_json" \
           --argjson servers "$mcp_servers_json" \
-          '.projects[$dir] = ((.projects[$dir] // {}) + {
+          'reduce $dirs[] as $dir (.; .projects[$dir] = ((.projects[$dir] // {}) + {
               hasTrustDialogAccepted: true,
               hasClaudeMdExternalIncludesApproved: true,
               hasClaudeMdExternalIncludesWarningShown: true,
@@ -206,7 +233,7 @@ if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
               mcpContextUris: (.projects[$dir].mcpContextUris // []),
               disabledMcpjsonServers: (.projects[$dir].disabledMcpjsonServers // []),
               mcpServers: (.projects[$dir].mcpServers // {})
-          })' "$HOME/.claude.json" > "$tmp_claude" \
+          }))' "$HOME/.claude.json" > "$tmp_claude" \
        && [[ -s $tmp_claude ]]; then
         mv "$tmp_claude" "$HOME/.claude.json"
     else

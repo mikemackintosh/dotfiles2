@@ -202,6 +202,19 @@ stub="$HOME/.dotfiles/docker/claude-review/cc-status-stub"
 # there would silently no-op.
 [[ -d $HOME/.dotfiles/claude ]] && run+=(-v "$HOME/.dotfiles/claude:$HOME/.dotfiles/claude:ro")
 
+# Extra mounts for adjacent repos. Caller (bin/git-feature / git-review)
+# sets CLAUDE_REVIEW_EXTRA_MOUNTS to a colon-separated list of paths that
+# should be RW-mounted at their own paths — typically the workdir's
+# owner directory (~/agent-work/<owner>/ and/or ~/go/src/github.com/<owner>/)
+# so Claude can work on sibling repos under the same github owner.
+if [[ -n ${CLAUDE_REVIEW_EXTRA_MOUNTS:-} ]]; then
+    _oldifs=$IFS; IFS=:
+    for _extra in $CLAUDE_REVIEW_EXTRA_MOUNTS; do
+        [[ -n $_extra && -d $_extra ]] && run+=(-v "$_extra:$_extra")
+    done
+    IFS=$_oldifs
+fi
+
 # SSH agent forwarding — for `git push` under passphrased keys AND for
 # SSH-based commit signing (1Password Agent). Prefer whatever SSH_AUTH_SOCK
 # already points at, but if that's the stock macOS Keychain agent or

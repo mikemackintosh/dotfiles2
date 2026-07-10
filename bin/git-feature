@@ -354,6 +354,39 @@ fi
 # workdir so Claude Code doesn't prompt on startup. Each agent-work
 # clone is a NEW absolute path, so per-project state doesn't carry
 # across runs unless we write it here.
+# Determine "owner scope" directories — parents under agent-work or
+# ~/go/src/github.com/<owner> — so we can mount them into the container
+# and pre-approve trust for every sibling repo. Lets Claude work on
+# adjacent repos (e.g. commit to wealthsimple/scrappy from a session
+# that started in wealthsimple/mcplocker) without the auto-mode
+# permission classifier blocking cross-repo writes.
+adjacent_dirs=()
+if [[ $repo == "$HOME/agent-work/"* ]]; then
+    # Pattern: $HOME/agent-work/<owner>/<repo>-XXXXXX
+    _agent_owner_dir="$(dirname "$repo")"
+    adjacent_dirs+=("$_agent_owner_dir")
+    # If a canonical checkout tree exists for this owner, mount that too
+    # so Claude can reach uncloned sibling repos.
+    _owner_name=$(basename "$_agent_owner_dir")
+    _canonical="$HOME/go/src/github.com/$_owner_name"
+    [[ -d $_canonical ]] && adjacent_dirs+=("$_canonical")
+elif [[ $repo == "$HOME/go/src/github.com/"* ]]; then
+    # Pattern: $HOME/go/src/github.com/<owner>/<repo>
+    _canonical_owner="$(dirname "$repo")"
+    adjacent_dirs+=("$_canonical_owner")
+fi
+
+# Export as colon-separated for claude-in-docker to mount.
+if (( ${#adjacent_dirs[@]} > 0 )); then
+    _joined=""
+    for d in "${adjacent_dirs[@]}"; do
+        [[ -n $_joined ]] && _joined+=":"
+        _joined+="$d"
+    done
+    export CLAUDE_REVIEW_EXTRA_MOUNTS=$_joined
+    echo "→ Adjacent repo scope: ${adjacent_dirs[*]}"
+fi
+
 if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
     # Collect any MCP server names declared in the workdir's .mcp.json
     # so those get auto-enabled too (e.g. `playwright` in the orbital repo).
@@ -362,11 +395,22 @@ if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
         mcp_servers_json=$(jq -c '(.mcpServers // {}) | keys' "$repo/.mcp.json" 2>/dev/null || echo '[]')
     fi
 
-    echo "→ Pre-approving trust + MCP for $repo"
+    # Enumerate sibling repos under each adjacent_dir so we can trust
+    # them all at once. This lets Claude write to any of them without
+    # the auto-mode classifier blocking cross-repo writes.
+    trusted_paths=("$repo")
+    for d in "${adjacent_dirs[@]}"; do
+        while IFS= read -r sub; do
+            [[ -n $sub && -d $sub/.git ]] && trusted_paths+=("$sub")
+        done < <(find "$d" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+    done
+
+    echo "→ Pre-approving trust + MCP for ${#trusted_paths[@]} path(s)"
     tmp_claude=$(mktemp -t claude-json.XXXXXX)
-    if jq --arg dir "$repo" \
+    trust_paths_json=$(printf '%s\n' "${trusted_paths[@]}" | jq -R . | jq -s .)
+    if jq --argjson dirs "$trust_paths_json" \
           --argjson servers "$mcp_servers_json" \
-          '.projects[$dir] = ((.projects[$dir] // {}) + {
+          'reduce $dirs[] as $dir (.; .projects[$dir] = ((.projects[$dir] // {}) + {
               hasTrustDialogAccepted: true,
               hasClaudeMdExternalIncludesApproved: true,
               hasClaudeMdExternalIncludesWarningShown: true,
@@ -376,7 +420,7 @@ if command -v jq >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
               mcpContextUris: (.projects[$dir].mcpContextUris // []),
               disabledMcpjsonServers: (.projects[$dir].disabledMcpjsonServers // []),
               mcpServers: (.projects[$dir].mcpServers // {})
-          })' "$HOME/.claude.json" > "$tmp_claude" \
+          }))' "$HOME/.claude.json" > "$tmp_claude" \
        && [[ -s $tmp_claude ]]; then
         mv "$tmp_claude" "$HOME/.claude.json"
     else
