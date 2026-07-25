@@ -188,6 +188,8 @@ prompt_path=$(mktemp -t git-review-prompt.XXXXXX)
     echo "- INTERACTIVE=$interactive"
     echo "- WORKDIR=$workdir"
     echo "- PR_URL=$pr_url"
+    echo "- DOCKER=$CLAUDE_REVIEW_DOCKER  (no host toolchains — containerize build/test)"
+    echo "- CACHE_DIR=$CLAUDE_REVIEW_CACHE_DIR  (mount subdirs into your containers)"
     echo
     echo "---"
     echo
@@ -263,6 +265,24 @@ export CLAUDE_REVIEW_MODE=$mode
 export CLAUDE_REVIEW_INTERACTIVE=$interactive
 export CLAUDE_REVIEW_WORKDIR=$workdir
 export CLAUDE_REVIEW_PR_URL=$pr_url
+
+# Docker signal — 1 iff the daemon is reachable. The review checkout
+# has no language toolchains on PATH, so the agent should containerize
+# build/test/lint. Both containerized and --no-docker code paths get
+# this signal because docker is usable from either side.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    export CLAUDE_REVIEW_DOCKER=1
+else
+    export CLAUDE_REVIEW_DOCKER=0
+fi
+
+# Persistent cache dir for containerized tool runs (Go modules, node
+# modules, pip wheels, etc.). Pre-create the well-known subdirs so
+# `docker run -v $CACHE_DIR/gocache:/root/.cache/go-build` doesn't
+# create the host path as root:root the first time.
+cache_dir=${CLAUDE_REVIEW_CACHE_DIR:-$HOME/.cache/git-review}
+mkdir -p "$cache_dir"/{gocache,gomod,npm,pip,yarn,cargo}
+export CLAUDE_REVIEW_CACHE_DIR=$cache_dir
 
 cd "$workdir"
 
