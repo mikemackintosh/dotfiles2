@@ -141,14 +141,38 @@ run+=(
 
 # ~/.claude.json lives OUTSIDE ~/.claude and stores top-level state:
 # hasCompletedOnboarding, oauthAccount, machineID, and the per-project
-# trust / MCP approvals we pre-populate from bin/git-feature. Without
-# this mount every container run is a "first run" and triggers the
-# onboarding wizard (theme picker, welcome screen, etc.).
-# Must exist on the host — touch it if the user has never run claude
-# so the mount target isn't a directory (Docker's default when the
-# source doesn't exist).
+# trust / MCP approvals we pre-populate from bin/git-feature.
 [[ -f $HOME/.claude.json ]] || touch "$HOME/.claude.json"
-run+=(-v "$HOME/.claude.json:$HOME/.claude.json")
+
+# Parallel claude sessions cannot share every ~/.claude file:
+#   • scheduled_tasks.lock is a single-instance lock — one container
+#     grabs it, later containers get kicked (that's the exit-137 the
+#     user hit when starting a second git-feature).
+#   • .claude.json is race-written on trust changes / MCP config —
+#     see ~/.claude/backups/.claude.json.corrupted.* for evidence.
+# Overlay per-container copies of JUST these two files. Everything
+# else in ~/.claude stays shared (projects/, sessions/ use per-workdir
+# encoded paths so they can't cross-collide anyway).
+if [[ -n $container_name ]]; then
+    _cc_dir="$HOME/.claude-container/$container_name"
+    mkdir -p "$_cc_dir"
+
+    # Fresh empty lockfile — claude flocks its own copy, not the host's.
+    : > "$_cc_dir/scheduled_tasks.lock"
+    run+=(-v "$_cc_dir/scheduled_tasks.lock:$HOME/.claude/scheduled_tasks.lock")
+
+    # Per-container .claude.json seeded from the host's current copy so
+    # git-feature's trust pre-approvals carry in on first launch.
+    # Subsequent writes stay in the container's own copy.
+    if [[ ! -f $_cc_dir/.claude.json ]]; then
+        cp "$HOME/.claude.json" "$_cc_dir/.claude.json" 2>/dev/null || \
+            echo '{}' > "$_cc_dir/.claude.json"
+    fi
+    run+=(-v "$_cc_dir/.claude.json:$HOME/.claude.json")
+else
+    # No container_name → single-instance mode, use the host files.
+    run+=(-v "$HOME/.claude.json:$HOME/.claude.json")
+fi
 
 # Optional mounts — skip if the file/dir doesn't exist on the host so we
 # don't error on machines that never set them up.
@@ -185,7 +209,44 @@ run+=(-v "$ssh_stage:$HOME/.ssh")
 # ~/.npmrc — needed for any `npx <pkg>` MCP servers pulling from a
 # private npm registry. Runtime-only; build-time uses the BuildKit
 # secret mount above.
-[[ -f $HOME/.npmrc          ]] && run+=(-v "$HOME/.npmrc:$HOME/.npmrc:ro")
+#
+# npm-proxy integration: if the caching proxy is set up
+# (~/.local/share/npm-proxy/cert.pem present), rewrite registry URLs
+# in the mounted npmrc so the container hits the proxy port. The
+# proxy runs as a user LaunchAgent on :4873 — unprivileged, so the
+# hostname alone (implicit :443) won't reach it. We shift URLs to
+# include :4873 in a staged copy without touching the real ~/.npmrc.
+_npm_proxy_cert="$HOME/.local/share/npm-proxy/cert.pem"
+_npm_proxy_port=${NPM_PROXY_PORT:-4873}
+if [[ -f $HOME/.npmrc ]]; then
+    if [[ -f $_npm_proxy_cert && -f $HOME/.npmrc ]]; then
+        # Derive the host from the registry= line and rewrite any URL
+        # that references it (with or without a port) to include our
+        # port. sed -E for POSIX-ish ERE; two passes handle both the
+        # `registry=https://host/…` and `//host/…:_auth=…` forms.
+        _hostline=$(awk -F= '/^[[:space:]]*registry[[:space:]]*=/{sub(/^[[:space:]]*registry[[:space:]]*=[[:space:]]*/,""); print; exit}' "$HOME/.npmrc")
+        _host=$(printf '%s' "$_hostline" | awk -F/ '{print $3}' | awk -F: '{print $1}')
+        _staged=$(mktemp -t npmrc.XXXXXX)
+        if [[ -n $_host ]]; then
+            sed -E \
+                -e "s|(https?://${_host})/|\\1:${_npm_proxy_port}/|g" \
+                -e "s|^//${_host}/|//${_host}:${_npm_proxy_port}/|" \
+                "$HOME/.npmrc" > "$_staged"
+        else
+            cp "$HOME/.npmrc" "$_staged"
+        fi
+        run+=(-v "$_staged:$HOME/.npmrc:ro")
+        run+=(-v "$_npm_proxy_cert:/etc/ssl/certs/npm-proxy.pem:ro")
+        run+=(-e "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/npm-proxy.pem")
+        # host-gateway → the macOS host from inside the container.
+        # Docker Desktop reserves this literal; on Linux Docker you'd
+        # need an explicit IP. Container-side DNS for the corp host
+        # now points at the Mac, where our proxy is listening.
+        [[ -n $_host ]] && run+=(--add-host "${_host}:host-gateway")
+    else
+        run+=(-v "$HOME/.npmrc:$HOME/.npmrc:ro")
+    fi
+fi
 
 # ~/.claude/settings.json contains hooks that call macOS-only binaries
 # (e.g. iTerm2's cc-status at ~/.config/iterm2/cc-status). Mount a
