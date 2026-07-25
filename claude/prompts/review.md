@@ -10,6 +10,43 @@ The wrapper (`bin/git-review`) sets these signals — they appear at the bottom 
 - `PR_URL` — `https://github.com/<owner>/<repo>/pull/<n>`. Parse it for owner/repo/pr when calling MCP tools.
 - `REVIEW_MODE` — `review` (default; hold posting) or `fix` (see below).
 - `INTERACTIVE` — `1` (ask before any destructive/external action) or `0` (proceed without prompting; only set when running inside the claude-review container).
+- `DOCKER` — `1` when `docker` is on PATH and the daemon is reachable. Assume you have language toolchains **only via Docker** (see next section).
+- `CACHE_DIR` — persistent host path (e.g. `~/.cache/git-review`) with per-tool subdirs (`gocache/`, `gomod/`, `npm/`, `pip/`, `yarn/`, `cargo/`). Mount these into your containers so repeat runs don't re-download the world.
+
+## Building, testing, linting — use Docker
+
+The review shell has **no language toolchains on PATH** (no `go`, `node`, `python`, `cargo`, etc.), but Docker is available (`CLAUDE_REVIEW_DOCKER=1`). Never conclude "I can't build/test this" — containerize it.
+
+Workflow:
+
+1. Detect the required version from the repo: `go.mod` (`go X.Y`), `.nvmrc` / `package.json` engines, `.python-version` / `pyproject.toml`, `rust-toolchain[.toml]`. Pull the matching official image.
+2. Mount the checkout RW and the cache subdirs from `$CLAUDE_REVIEW_CACHE_DIR` as persistent volumes.
+3. Run build / test / fmt / vet / lint inside the container.
+4. If a step needs a database (migrations, integration tests), start an ephemeral DB container on a throwaway docker network, run the step, tear it all down. Namespace container/network names with the PR number for parallel safety (e.g. `review-pr-<n>-pg`).
+5. Always clean up your containers/networks/volumes when done. Use `--rm` where possible; explicitly `docker rm -f` + `docker network rm` in a trap otherwise.
+6. **Never `git add` the harness artifacts** (`.env.review`, `docker-compose.override.yml`, ad-hoc Dockerfiles you dropped for the review) — they belong to the review, not the PR.
+
+Go example (adjust image tag to match `go.mod`):
+
+```
+docker run --rm -v "$WORKDIR":/src -w /src \
+    -v "$CLAUDE_REVIEW_CACHE_DIR/gocache":/root/.cache/go-build \
+    -v "$CLAUDE_REVIEW_CACHE_DIR/gomod":/go/pkg/mod \
+    golang:<ver> bash -c '
+      git config --global --add safe.directory /src
+      gofmt -l .
+      go vet -buildvcs=false ./...
+      go build -buildvcs=false ./...
+      go test  -buildvcs=false ./...'
+```
+
+Known gotchas:
+
+- Bind-mounted repos trip git's "dubious ownership" check → run `git config --global --add safe.directory /src` inside the container first.
+- That same ownership issue breaks VCS stamping → pass `-buildvcs=false` to go build/vet/test.
+- Node: use the exact major from `.nvmrc` / `engines.node`; mount `$CLAUDE_REVIEW_CACHE_DIR/npm` at `/root/.npm` (or `/home/node/.npm` if you drop to `node` user).
+- Python: mount `$CLAUDE_REVIEW_CACHE_DIR/pip` at `/root/.cache/pip`. Prefer `python:<ver>-slim` unless the project wheels need glibc/build tools.
+- Migration verification: `postgres:<ver>` on a docker network + the project's usual migration runner over the **full** migrations dir (mirrors what CI does), then test the Down→Up cycle for any migration added in this PR.
 
 ## Workflow
 
