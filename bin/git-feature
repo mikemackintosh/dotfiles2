@@ -161,11 +161,29 @@ if [[ -n $resume_session ]]; then
 fi
 
 # parse_owner_repo <spec> → sets globals _spec_owner / _spec_name (empty
-# on no match). Accepts full github URL or bare owner/repo shorthand.
+# on no match). Accepts:
+#   https://github.com/owner/repo(.git)
+#   http://github.com/owner/repo(.git)
+#   ssh://git@github.com/owner/repo(.git)
+#   git@github.com:owner/repo(.git)
+#   github.com/owner/repo(.git)          (bare host, no scheme)
+#   owner/repo                           (bare shorthand)
+# Trailing `.git` and trailing `/` are tolerated on every form.
 parse_owner_repo() {
     _spec_owner=""; _spec_name=""
     local spec=$1
-    if [[ $spec =~ ^https?://github\.com/([^/]+)/([^/#?.]+)(\.git)?/?$ ]]; then
+    spec=${spec%/}
+    spec=${spec%.git}
+    if [[ $spec =~ ^https?://github\.com/([^/]+)/([^/#?]+)$ ]]; then
+        _spec_owner=${BASH_REMATCH[1]}
+        _spec_name=${BASH_REMATCH[2]}
+    elif [[ $spec =~ ^ssh://git@github\.com/([^/]+)/([^/#?]+)$ ]]; then
+        _spec_owner=${BASH_REMATCH[1]}
+        _spec_name=${BASH_REMATCH[2]}
+    elif [[ $spec =~ ^git@github\.com:([^/]+)/([^/#?]+)$ ]]; then
+        _spec_owner=${BASH_REMATCH[1]}
+        _spec_name=${BASH_REMATCH[2]}
+    elif [[ $spec =~ ^github\.com/([^/]+)/([^/#?]+)$ ]]; then
         _spec_owner=${BASH_REMATCH[1]}
         _spec_name=${BASH_REMATCH[2]}
     elif [[ $spec =~ ^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
@@ -214,13 +232,6 @@ clone_into_session() {
     local ref
     ref=$(find_local_reference "$owner" "$name")
 
-    # -c url."<url>".insteadof= disables any host-level insteadOf
-    # rewrite for github URLs (e.g. `gh:` shorthand, or an SSH↔HTTPS
-    # coercion in ~/.gitconfig). Ensures our explicit clone URL is
-    # honored verbatim.
-    local nogitcfg=(-c "url.https://github.com/.insteadOf=" \
-                    -c "url.git@github.com:.insteadOf=")
-
     local one_p_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
     local clone_url how
     if [[ -S $one_p_sock ]]; then
@@ -240,13 +251,13 @@ clone_into_session() {
         # removes the .git/objects/info/alternates file. Without it,
         # git ops inside the container fail because the reference
         # path ($HOME/go/src/…) isn't mounted in the container.
-        if ! git "${nogitcfg[@]}" clone --quiet --reference-if-able "$ref" --dissociate "$clone_url" "$target"; then
+        if ! git clone --quiet --reference-if-able "$ref" --dissociate "$clone_url" "$target"; then
             rm -rf "$target"
             return 1
         fi
     else
         echo "→ Cloning $owner/$name → $target ($how; depth=100)" >&2
-        if ! git "${nogitcfg[@]}" clone --quiet --depth 100 "$clone_url" "$target"; then
+        if ! git clone --quiet --depth 100 "$clone_url" "$target"; then
             rm -rf "$target"
             return 1
         fi
@@ -696,6 +707,10 @@ else
     container_shell_cmd="cd '$repo' && printf '\033[2m[--no-docker: no container to exec into; host shell in workdir]\033[0m\n' && exec \${SHELL:-/bin/zsh} -l"
 fi
 
+# Pre-declare the injector log path so the paper-trail block below can
+# surface it. The injector script itself is written further down.
+injector_log="${TMPDIR:-/tmp}/git-feature-injector-$$.log"
+
 # Paper-trail before we hand off. Injector + haiku log paths included
 # so if the prompt never lands in pane 0 (or the slug looks wrong),
 # you can `cat` those files to see exactly what happened.
@@ -748,7 +763,6 @@ tmux select-pane -t "$main_pane"
 # loses its footing); `run-shell -b` runs inside the tmux server and
 # survives regardless of what the client does.
 buf_name="gf-$$-$(printf '%s' "$session" | tr -c '[:alnum:]' _)"
-injector_log="${TMPDIR:-/tmp}/git-feature-injector-$$.log"
 
 # Write the injector as its own script so run-shell can invoke it
 # without quoting nightmares. Cleans itself up when done.
@@ -757,18 +771,18 @@ chmod +x "$injector_path"
 cat > "$injector_path" <<INJECTOR_EOF
 #!/usr/bin/env bash
 exec >>"$injector_log" 2>&1
-echo "=== injector started at \$(date) ==="
+echo "=== injector started at \$(date +%s.%3N) ==="
+
+# 1) Wait for the container to be running. Poll every 100ms up to 60s
+#    so we catch a warm container in ~one tick instead of ~one second.
 if [[ $use_docker -eq 1 ]]; then
-    for i in \$(seq 1 60); do
+    for i in \$(seq 1 600); do
         if docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null | grep -q true; then
-            echo "container running after \${i}s"
+            echo "container running after ~\$((i * 100))ms"
             break
         fi
-        sleep 1
+        sleep 0.1
     done
-    sleep 3
-else
-    sleep 2
 fi
 
 if [[ ! -f "$prompt_path" ]]; then
@@ -780,17 +794,39 @@ if ! tmux has-session -t "$session" 2>/dev/null; then
     exit 0
 fi
 
+# 2) Wait for Claude's TUI to render. Claude Code draws an input box
+#    around a '>' prompt using box-drawing chars ('╰' is the bottom-
+#    left corner). When it appears in the pane capture, the UI is
+#    ready to accept a paste. Cap at 10s.
+for i in \$(seq 1 100); do
+    if tmux capture-pane -p -t "$main_pane" 2>/dev/null | grep -q '╰'; then
+        echo "claude UI ready after ~\$((i * 100))ms"
+        break
+    fi
+    sleep 0.1
+done
+
 echo "loading buffer + pasting to pane $main_pane"
 tmux load-buffer -b "$buf_name" "$prompt_path"
 # -p uses bracketed-paste escape sequences so claude's TUI treats the
 # whole content as one atomic paste (newlines stay literal, not
 # submit-per-line). -d deletes the buffer after paste.
 tmux paste-buffer -p -b "$buf_name" -t "$main_pane" -d
-# Longer settle before Enter — big pastes need a moment to fully
-# render in claude's input box before submit.
-sleep 2
+
+# 3) Wait for the paste to land in Claude's input box. For big pastes
+#    Claude renders '[Pasted text +N lines]'; for small ones the last
+#    words of the prompt appear inline. Either match confirms readiness.
+#    Cap at 3s.
+for i in \$(seq 1 30); do
+    if tmux capture-pane -p -t "$main_pane" 2>/dev/null | grep -qE '\[Pasted|Reminder of the task'; then
+        echo "paste landed after ~\$((i * 100))ms"
+        break
+    fi
+    sleep 0.1
+done
+
 tmux send-keys -t "$main_pane" Enter
-echo "=== injector done ==="
+echo "=== injector done at \$(date +%s.%3N) ==="
 rm -f "$prompt_path" "\$0"
 INJECTOR_EOF
 
