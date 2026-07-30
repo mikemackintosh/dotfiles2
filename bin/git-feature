@@ -555,24 +555,30 @@ else
 fi
 export CLAUDE_REVIEW_CONTAINER_NAME=$container_name
 
-# Claude is launched WITHOUT the prompt on the command line. Claude
-# Code v2's positional-prompt behavior isn't reliable for our use case
-# — it sometimes goes into one-shot mode and exits, or gets eaten by
-# variadic flags. Instead we paste the prompt into pane 0 with
-# `tmux load-buffer` + `paste-buffer` once the container is up and
-# claude's UI has rendered (see the "Inject prompt" block below).
+# Claude is launched WITH the prompt baked into its argv via
+# --prompt-file (containerized) or a positional arg (host). Prompt
+# lands the instant claude's TUI renders — no post-launch tmux
+# paste-buffer injection.
 if (( use_docker )) && [[ -x "$HOME/.dotfiles/bin/claude-in-docker" ]]; then
-    inner_cmd="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$repo'"
-    [[ -n $model ]] && inner_cmd+=" --model '$model'"
-    (( yolo )) && inner_cmd+=" --yolo"
-    # Restart command: same as inner_cmd but with --continue appended so
-    # claude resumes the last session's plan/history in this workdir.
-    restart_cmd="$inner_cmd --continue"
+    inner_cmd="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$repo' --prompt-file '$prompt_path'"
+    restart_inner="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$repo'"
+    [[ -n $model ]] && { inner_cmd+=" --model '$model'"; restart_inner+=" --model '$model'"; }
+    (( yolo ))     && { inner_cmd+=" --yolo";           restart_inner+=" --yolo"; }
+    # Restart command resumes the last session's plan/history — no
+    # prompt-file (claude --continue picks up the prior conversation).
+    restart_cmd="$restart_inner --continue"
 else
+    # Host path: read the prompt content now and pass positionally.
+    _host_prompt=$(cat "$prompt_path")
+    rm -f "$prompt_path"
     inner_cmd="claude"
-    [[ -n $model ]] && inner_cmd+=" --model '$model'"
-    (( yolo )) && inner_cmd+=" --dangerously-skip-permissions"
-    restart_cmd="$inner_cmd --continue"
+    restart_inner="claude"
+    [[ -n $model ]] && { inner_cmd+=" --model '$model'"; restart_inner+=" --model '$model'"; }
+    (( yolo ))     && { inner_cmd+=" --dangerously-skip-permissions"; restart_inner+=" --dangerously-skip-permissions"; }
+    # Positional prompt goes last. Use printf %q to safely quote the
+    # multi-line content into a single shell arg the pane's bash reads.
+    inner_cmd+=" $(printf '%q' "$_host_prompt")"
+    restart_cmd="$restart_inner --continue"
 fi
 
 # Wrap so:
@@ -587,7 +593,8 @@ fi
 #     tmux session is killed (compose-logs pane + container-shell pane
 #     die too). One keypress teardown instead of Ctrl-D on all three.
 #   - Detach without killing: standard tmux prefix + d.
-# Prompt file cleanup is handled by the background injector below.
+# Prompt file is consumed (and deleted) by claude-in-docker's
+# --prompt-file handler.
 launch_cmd=$(cat <<EOSH
 { $inner_cmd; }
 _ec=\$?
@@ -707,13 +714,9 @@ else
     container_shell_cmd="cd '$repo' && printf '\033[2m[--no-docker: no container to exec into; host shell in workdir]\033[0m\n' && exec \${SHELL:-/bin/zsh} -l"
 fi
 
-# Pre-declare the injector log path so the paper-trail block below can
-# surface it. The injector script itself is written further down.
-injector_log="${TMPDIR:-/tmp}/git-feature-injector-$$.log"
-
-# Paper-trail before we hand off. Injector + haiku log paths included
-# so if the prompt never lands in pane 0 (or the slug looks wrong),
-# you can `cat` those files to see exactly what happened.
+# Paper-trail before we hand off. Prompt is baked into claude's argv
+# via --prompt-file (see inner_cmd above) so there's no post-launch
+# injection to debug.
 cat <<EOF
 → tmux session:       $session
 → Container name:     $container_name
@@ -721,7 +724,6 @@ cat <<EOF
 → Reattach:           tmux attach -t $session
 → Peek read-only:     tmux attach -r -t $session
 → Haiku debug log:    $HAIKU_LOG
-→ Injector debug log: $injector_log
 EOF
 
 # Build the three-pane session. We use pane IDs (`%N`) rather than
@@ -753,84 +755,10 @@ tmux select-pane -t "$main_pane"    -T "claude"          2>/dev/null || true
 tmux select-pane -t "$compose_pane" -T "compose logs"    2>/dev/null || true
 tmux select-pane -t "$shell_pane"   -T "container shell" 2>/dev/null || true
 
-# Focus back on the claude pane before handing over.
+# Focus back on the claude pane before handing over. The prompt is
+# already baked into claude's argv (--prompt-file) so nothing more to
+# inject.
 tmux select-pane -t "$main_pane"
-
-# Inject the prompt into pane 0 (claude) once its UI is ready.
-# Use `tmux run-shell -b` (server-side background job) rather than a
-# `& disown` subshell. The subshell approach dies unreliably when we
-# `exec tmux attach` below (the parent bash is replaced and the child
-# loses its footing); `run-shell -b` runs inside the tmux server and
-# survives regardless of what the client does.
-buf_name="gf-$$-$(printf '%s' "$session" | tr -c '[:alnum:]' _)"
-
-# Write the injector as its own script so run-shell can invoke it
-# without quoting nightmares. Cleans itself up when done.
-injector_path=$(mktemp -t git-feature-injector.XXXXXX)
-chmod +x "$injector_path"
-cat > "$injector_path" <<INJECTOR_EOF
-#!/usr/bin/env bash
-exec >>"$injector_log" 2>&1
-echo "=== injector started at \$(date +%s.%3N) ==="
-
-# 1) Wait for the container to be running. Poll every 100ms up to 60s
-#    so we catch a warm container in ~one tick instead of ~one second.
-if [[ $use_docker -eq 1 ]]; then
-    for i in \$(seq 1 600); do
-        if docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null | grep -q true; then
-            echo "container running after ~\$((i * 100))ms"
-            break
-        fi
-        sleep 0.1
-    done
-fi
-
-if [[ ! -f "$prompt_path" ]]; then
-    echo "prompt file missing: $prompt_path"
-    exit 0
-fi
-if ! tmux has-session -t "$session" 2>/dev/null; then
-    echo "tmux session '$session' no longer exists"
-    exit 0
-fi
-
-# 2) Wait for Claude's TUI to render. Claude Code draws an input box
-#    around a '>' prompt using box-drawing chars ('╰' is the bottom-
-#    left corner). When it appears in the pane capture, the UI is
-#    ready to accept a paste. Cap at 10s.
-for i in \$(seq 1 100); do
-    if tmux capture-pane -p -t "$main_pane" 2>/dev/null | grep -q '╰'; then
-        echo "claude UI ready after ~\$((i * 100))ms"
-        break
-    fi
-    sleep 0.1
-done
-
-echo "loading buffer + pasting to pane $main_pane"
-tmux load-buffer -b "$buf_name" "$prompt_path"
-# -p uses bracketed-paste escape sequences so claude's TUI treats the
-# whole content as one atomic paste (newlines stay literal, not
-# submit-per-line). -d deletes the buffer after paste.
-tmux paste-buffer -p -b "$buf_name" -t "$main_pane" -d
-
-# 3) Wait for the paste to land in Claude's input box. For big pastes
-#    Claude renders '[Pasted text +N lines]'; for small ones the last
-#    words of the prompt appear inline. Either match confirms readiness.
-#    Cap at 3s.
-for i in \$(seq 1 30); do
-    if tmux capture-pane -p -t "$main_pane" 2>/dev/null | grep -qE '\[Pasted|Reminder of the task'; then
-        echo "paste landed after ~\$((i * 100))ms"
-        break
-    fi
-    sleep 0.1
-done
-
-tmux send-keys -t "$main_pane" Enter
-echo "=== injector done at \$(date +%s.%3N) ==="
-rm -f "$prompt_path" "\$0"
-INJECTOR_EOF
-
-tmux run-shell -b "$injector_path"
 
 # Handoff complete — cleanup trap should NOT fire beyond this point.
 _handoff_done=1

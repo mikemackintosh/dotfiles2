@@ -172,6 +172,24 @@ fi
 mode="review"; (( fix )) && mode="fix"
 pr_url="https://github.com/$owner/$repo/pull/$pr"
 
+# Docker signal — 1 iff the daemon is reachable. The review checkout
+# has no language toolchains on PATH, so the agent should containerize
+# build/test/lint. Both containerized and --no-docker code paths get
+# this signal because docker is usable from either side.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    export CLAUDE_REVIEW_DOCKER=1
+else
+    export CLAUDE_REVIEW_DOCKER=0
+fi
+
+# Persistent cache dir for containerized tool runs (Go modules, node
+# modules, pip wheels, etc.). Pre-create the well-known subdirs so
+# `docker run -v $CACHE_DIR/gocache:/root/.cache/go-build` doesn't
+# create the host path as root:root the first time.
+cache_dir=${CLAUDE_REVIEW_CACHE_DIR:-$HOME/.cache/git-review}
+mkdir -p "$cache_dir"/{gocache,gomod,npm,pip,yarn,cargo}
+export CLAUDE_REVIEW_CACHE_DIR=$cache_dir
+
 # Task-first prompt ordering: the PR context is at the top so it's
 # visible as soon as claude renders the paste, and repeated at the
 # bottom so it's fresh in the model's context.
@@ -266,24 +284,6 @@ export CLAUDE_REVIEW_INTERACTIVE=$interactive
 export CLAUDE_REVIEW_WORKDIR=$workdir
 export CLAUDE_REVIEW_PR_URL=$pr_url
 
-# Docker signal — 1 iff the daemon is reachable. The review checkout
-# has no language toolchains on PATH, so the agent should containerize
-# build/test/lint. Both containerized and --no-docker code paths get
-# this signal because docker is usable from either side.
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    export CLAUDE_REVIEW_DOCKER=1
-else
-    export CLAUDE_REVIEW_DOCKER=0
-fi
-
-# Persistent cache dir for containerized tool runs (Go modules, node
-# modules, pip wheels, etc.). Pre-create the well-known subdirs so
-# `docker run -v $CACHE_DIR/gocache:/root/.cache/go-build` doesn't
-# create the host path as root:root the first time.
-cache_dir=${CLAUDE_REVIEW_CACHE_DIR:-$HOME/.cache/git-review}
-mkdir -p "$cache_dir"/{gocache,gomod,npm,pip,yarn,cargo}
-export CLAUDE_REVIEW_CACHE_DIR=$cache_dir
-
 cd "$workdir"
 
 # --no-docker path: run claude on the host. No tmux 3-pane setup —
@@ -327,17 +327,24 @@ fi
 container_name="claude-review-$(basename "$workdir")-$$"
 export CLAUDE_REVIEW_CONTAINER_NAME=$container_name
 
-# inner_cmd — no positional prompt (tmux paste-buffer handles that).
+# inner_cmd — prompt is baked into claude's argv via --prompt-file
+# (containerized) or a positional arg (host fallback), so it lands
+# the instant claude's TUI renders. No tmux paste-buffer injection.
 if [[ -x "$HOME/.dotfiles/bin/claude-in-docker" ]]; then
-    inner_cmd="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$workdir'"
-    [[ -n $model ]] && inner_cmd+=" --model '$model'"
-    (( yolo )) && inner_cmd+=" --yolo"
-    restart_cmd="$inner_cmd --continue"
+    inner_cmd="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$workdir' --prompt-file '$prompt_path'"
+    restart_inner="'$HOME/.dotfiles/bin/claude-in-docker' --workdir '$workdir'"
+    [[ -n $model ]] && { inner_cmd+=" --model '$model'"; restart_inner+=" --model '$model'"; }
+    (( yolo ))     && { inner_cmd+=" --yolo";           restart_inner+=" --yolo"; }
+    restart_cmd="$restart_inner --continue"
 else
+    _host_prompt=$(cat "$prompt_path")
+    rm -f "$prompt_path"
     inner_cmd="claude"
-    [[ -n $model ]] && inner_cmd+=" --model '$model'"
-    (( yolo )) && inner_cmd+=" --dangerously-skip-permissions"
-    restart_cmd="$inner_cmd --continue"
+    restart_inner="claude"
+    [[ -n $model ]] && { inner_cmd+=" --model '$model'"; restart_inner+=" --model '$model'"; }
+    (( yolo ))     && { inner_cmd+=" --dangerously-skip-permissions"; restart_inner+=" --dangerously-skip-permissions"; }
+    inner_cmd+=" $(printf '%q' "$_host_prompt")"
+    restart_cmd="$restart_inner --continue"
 fi
 
 # Pane 0 launcher: keeps pane alive after claude exits, resets terminal
@@ -445,47 +452,8 @@ tmux select-pane -t "$compose_pane" -T "compose logs"    2>/dev/null || true
 tmux select-pane -t "$shell_pane"   -T "container shell" 2>/dev/null || true
 tmux select-pane -t "$main_pane"
 
-# Prompt injector — server-side background task so it survives the
-# `exec tmux attach` handoff. Waits for the container to be running,
-# lets claude's TUI render, then paste-buffers the prompt in.
-buf_name="gr-$$-$(printf '%s' "$session" | tr -c '[:alnum:]' _)"
-injector_log="${TMPDIR:-/tmp}/git-review-injector-$$.log"
-injector_path=$(mktemp -t git-review-injector.XXXXXX)
-chmod +x "$injector_path"
-cat > "$injector_path" <<INJECTOR_EOF
-#!/usr/bin/env bash
-exec >>"$injector_log" 2>&1
-echo "=== injector started at \$(date) ==="
-if [[ $use_docker -eq 1 ]]; then
-    for i in \$(seq 1 60); do
-        if docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null | grep -q true; then
-            echo "container running after \${i}s"
-            break
-        fi
-        sleep 1
-    done
-    sleep 3
-else
-    sleep 2
-fi
-if [[ ! -f "$prompt_path" ]]; then
-    echo "prompt file missing: $prompt_path"
-    exit 0
-fi
-if ! tmux has-session -t "$session" 2>/dev/null; then
-    echo "tmux session '$session' no longer exists"
-    exit 0
-fi
-echo "loading buffer + pasting to pane $main_pane"
-tmux load-buffer -b "$buf_name" "$prompt_path"
-tmux paste-buffer -p -b "$buf_name" -t "$main_pane" -d
-sleep 2
-tmux send-keys -t "$main_pane" Enter
-echo "=== injector done ==="
-rm -f "$prompt_path" "\$0"
-INJECTOR_EOF
-
-tmux run-shell -b "$injector_path"
+# Prompt is baked into claude's argv via --prompt-file (see inner_cmd
+# above) — no post-launch tmux paste-buffer injection needed.
 
 _handoff_done=1
 
