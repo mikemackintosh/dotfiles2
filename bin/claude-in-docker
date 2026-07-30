@@ -4,14 +4,19 @@
 # but usable standalone.
 #
 # Usage:
-#   claude-in-docker --workdir <path> [--model <id>] [--yolo] [--] <initial prompt>
+#   claude-in-docker --workdir <path> [--model <id>] [--yolo]
+#                    [--prompt-file <path> | -- <initial prompt>]
 #
 # Flags:
-#   --workdir <path>   Absolute path to the workdir to mount (required).
-#   --model <id>       Model id passed to claude.
-#   --yolo             Add --dangerously-skip-permissions to the claude
-#                      invocation. Off by default — Claude will ask before
-#                      dangerous operations unless this is explicit.
+#   --workdir <path>       Absolute path to the workdir to mount (required).
+#   --model <id>           Model id passed to claude.
+#   --yolo                 Add --dangerously-skip-permissions to the claude
+#                          invocation. Off by default — Claude will ask before
+#                          dangerous operations unless this is explicit.
+#   --prompt-file <path>   Read the initial prompt from this file (host path)
+#                          and pass it as claude's positional argument. File
+#                          is deleted after read. Mutually exclusive with a
+#                          positional prompt.
 
 set -euo pipefail
 
@@ -25,13 +30,22 @@ yolo=0
 cont=0
 while (( $# )); do
     case $1 in
-        --workdir)  workdir=$2; shift 2 ;;
-        --model)    model=$2;   shift 2 ;;
-        --yolo)     yolo=1;     shift ;;
-        --continue) cont=1;     shift ;;
+        --workdir)     workdir=$2; shift 2 ;;
+        --model)       model=$2;   shift 2 ;;
+        --yolo)        yolo=1;     shift ;;
+        --continue)    cont=1;     shift ;;
+        --prompt-file)
+            if [[ -f $2 ]]; then
+                prompt=$(cat "$2")
+                rm -f "$2"
+            else
+                echo "claude-in-docker: --prompt-file '$2' not found" >&2
+                exit 2
+            fi
+            shift 2 ;;
         --)         shift; prompt="$*"; break ;;
         -h|--help)
-            sed -n '2,15p' "$0"; exit 0 ;;
+            sed -n '2,19p' "$0"; exit 0 ;;
         *)
             prompt="$*"; break ;;
     esac
@@ -325,12 +339,10 @@ while IFS='=' read -r k _; do
     [[ $k == CLAUDE_REVIEW_* ]] && run+=(-e "$k")
 done < <(env)
 
-# Launch claude. When bin/git-feature invokes us it doesn't pass a
-# positional prompt — Claude v2's positional-prompt behavior isn't
-# reliable for our use case. bin/git-feature injects the prompt via
-# tmux paste-buffer after claude's TUI is up.
-# Standalone callers may still pass a prompt positionally and it'll
-# be appended as claude's final arg.
+# Launch claude. bin/git-review and bin/git-feature pass --prompt-file
+# so the initial prompt is baked into claude's argv from the start —
+# no post-launch tmux paste-buffer injection. Standalone callers can
+# still pass a positional prompt.
 run+=("$IMAGE" claude)
 (( yolo )) && run+=(--dangerously-skip-permissions)
 (( cont )) && run+=(--continue)
