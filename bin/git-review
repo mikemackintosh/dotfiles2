@@ -120,7 +120,11 @@ if [[ ${#positional[@]} -eq 1 && ${positional[0]} =~ ^https?://github\.com/([^/]
     owner=${BASH_REMATCH[1]}
     repo=${BASH_REMATCH[2]}
     pr=${BASH_REMATCH[3]}
-elif [[ ${#positional[@]} -eq 2 && ${positional[0]} =~ ^([^/]+)/([^/]+)$ && ${positional[1]} =~ ^[0-9]+$ ]]; then
+elif [[ ${#positional[@]} -eq 2 && ${positional[1]} =~ ^[0-9]+$ && ${positional[0]} =~ ^([^/]+)/([^/]+)$ ]]; then
+    # Note: the capturing regex on ${positional[0]} MUST be the LAST
+    # =~ in this compound test — bash resets BASH_REMATCH after every
+    # match, so a non-capturing =~ after it would leave [1]/[2] unset
+    # and trip set -u.
     owner=${BASH_REMATCH[1]}
     repo=${BASH_REMATCH[2]}
     pr=${positional[1]}
