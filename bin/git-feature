@@ -715,6 +715,8 @@ else
 fi
 
 # Paper-trail before we hand off. Prompt is baked into claude's argv
+events_log="${TMPDIR:-/tmp}/git-feature-events-$$.log"
+
 # via --prompt-file (see inner_cmd above) so there's no post-launch
 # injection to debug.
 cat <<EOF
@@ -737,7 +739,6 @@ EOF
 #   event=kill signal=9   → someone sent SIGKILL (docker kill / rm -f)
 #   event=die exit=137    → SIGKILL from any source; check for prior
 #                           oom/kill events on the same container
-events_log="${TMPDIR:-/tmp}/git-feature-events-$$.log"
 monitor_cmd=$(cat <<EOSH
 log='$events_log'
 printf '\033[2m[docker events — die/kill/oom | log: %s]\033[0m\n' "\$log"
