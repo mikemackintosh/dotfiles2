@@ -724,19 +724,31 @@ cat <<EOF
 → Reattach:           tmux attach -t $session
 → Peek read-only:     tmux attach -r -t $session
 → Haiku debug log:    $HAIKU_LOG
+→ Events log:         $events_log
 EOF
 
 # Docker events monitor — small strip below the main pane. Streams
-# container die + oom events so a killed claude session is visible
-# immediately with exit code.
-monitor_cmd=$(cat <<'EOSH'
-printf '\033[2m[docker events — container die + oom will surface here]\033[0m\n'
+# container die/kill/oom events so a killed claude session is visible
+# immediately with exit code. Persists to $events_log for post-mortem
+# on containers already reaped by --rm.
+#
+# Distinguishing what killed a container:
+#   event=oom             → hit its own cgroup memory limit
+#   event=kill signal=9   → someone sent SIGKILL (docker kill / rm -f)
+#   event=die exit=137    → SIGKILL from any source; check for prior
+#                           oom/kill events on the same container
+events_log="${TMPDIR:-/tmp}/git-feature-events-$$.log"
+monitor_cmd=$(cat <<EOSH
+log='$events_log'
+printf '\033[2m[docker events — die/kill/oom | log: %s]\033[0m\n' "\$log"
 while :; do
-    docker events \
-        --filter 'type=container' \
-        --filter 'event=die' \
-        --filter 'event=oom' \
-        --format '{{.Time}} {{.Action}} {{.Actor.Attributes.name}} exit={{.Actor.Attributes.exitCode}}' 2>&1 || true
+    docker events \\
+        --filter 'type=container' \\
+        --filter 'event=die' \\
+        --filter 'event=kill' \\
+        --filter 'event=oom' \\
+        --format '{{.Time}} {{.Action}}{{if .Actor.Attributes.signal}} sig={{.Actor.Attributes.signal}}{{end}}{{if .Actor.Attributes.exitCode}} exit={{.Actor.Attributes.exitCode}}{{end}} name={{.Actor.Attributes.name}}' 2>&1 \\
+        | tee -a "\$log" || true
     printf '\033[2m[events stream ended — reconnecting in 3s]\033[0m\n'
     sleep 3
 done

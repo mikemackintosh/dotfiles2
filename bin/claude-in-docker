@@ -87,18 +87,14 @@ fi
 run=(run --rm -i)
 [[ -t 0 && -t 1 ]] && run+=(-t)
 
-# Per-container memory cap. Without this, when Docker Desktop's VM
-# runs out of RAM, its kernel OOM-killer picks a container to kill —
-# often a *different* claude session than the one that ballooned. The
-# victim dies with SIGKILL 137 and OOMKilled=false (kernel choice, not
-# cgroup limit). Setting --memory here means each container has its
-# own budget; hitting it OOMKills that container only (with
-# OOMKilled=true for clear signal) and leaves siblings alone.
-# Default 6g balances "big enough for a 1M-context claude session" with
-# "fits two in a ~14g Docker Desktop budget."
-mem=${CLAUDE_REVIEW_MEMORY:-6g}
-if [[ -n $mem && $mem != none ]]; then
-    run+=(--memory "$mem")
+# Per-container memory cap — opt-in via CLAUDE_REVIEW_MEMORY (e.g. 4g).
+# NOT set by default: on measurement, live claude-review containers
+# peak around 650 MiB and the Docker VM shows zero memory pressure
+# (dmesg clean, PSI ~zero), so capping was diagnosing a problem that
+# wasn't there. Set the env when you want a predictable cgroup OOM
+# instead of unbounded growth.
+if [[ -n ${CLAUDE_REVIEW_MEMORY:-} && ${CLAUDE_REVIEW_MEMORY} != none ]]; then
+    run+=(--memory "$CLAUDE_REVIEW_MEMORY")
 fi
 
 # Docker socket access. /var/run/docker.sock inside the container is
