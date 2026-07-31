@@ -717,6 +717,10 @@ fi
 # Paper-trail before we hand off. Prompt is baked into claude's argv
 events_log="${TMPDIR:-/tmp}/git-feature-events-$$.log"
 
+# Regex of signals to drop from the monitor — see git-review for the
+# rationale (SIGWINCH etc. drown out real termination signals).
+events_noise_re='sig=(1|17|18|20|21|22|23|28)( |$)'
+
 # via --prompt-file (see inner_cmd above) so there's no post-launch
 # injection to debug.
 cat <<EOF
@@ -741,7 +745,8 @@ EOF
 #                           oom/kill events on the same container
 monitor_cmd=$(cat <<EOSH
 log='$events_log'
-printf '\033[2m[docker events — die/kill/oom | log: %s]\033[0m\n' "\$log"
+noise='$events_noise_re'
+printf '\033[2m[docker events — die/kill(term)/oom | log: %s]\033[0m\n' "\$log"
 while :; do
     docker events \\
         --filter 'type=container' \\
@@ -749,6 +754,7 @@ while :; do
         --filter 'event=kill' \\
         --filter 'event=oom' \\
         --format '{{.Time}} {{.Action}}{{if .Actor.Attributes.signal}} sig={{.Actor.Attributes.signal}}{{end}}{{if .Actor.Attributes.exitCode}} exit={{.Actor.Attributes.exitCode}}{{end}} name={{.Actor.Attributes.name}}' 2>&1 \\
+        | grep --line-buffered -Ev "\$noise" \\
         | tee -a "\$log" || true
     printf '\033[2m[events stream ended — reconnecting in 3s]\033[0m\n'
     sleep 3
@@ -761,7 +767,16 @@ EOSH
 # `base-index 1` set in their tmux.conf (window 0 doesn't exist there).
 # `-P -F '#{pane_id}'` makes each command print the id of the pane it
 # just created, which we capture.
+# CRITICAL: pass CLAUDE_REVIEW_* via `-e KEY=VAL`. When git-feature is
+# invoked from inside an existing tmux session, new-session inherits
+# env from the attached client (stale from a previous git-feature run),
+# not from this shell. Without -e, CLAUDE_REVIEW_CONTAINER_NAME leaks
+# and claude-in-docker's reap-on-start kills the wrong container.
 main_pane=$(tmux new-session -d -s "$session" -c "$repo" \
+    -e "CLAUDE_REVIEW_CONTAINER_NAME=$container_name" \
+    -e "CLAUDE_REVIEW_WORKDIR=$repo" \
+    -e "CLAUDE_REVIEW_INTERACTIVE=$interactive" \
+    -e "CLAUDE_REVIEW_EXTRA_MOUNTS=${CLAUDE_REVIEW_EXTRA_MOUNTS:-}" \
     -P -F '#{pane_id}' "$launch_cmd")
 
 # Enable mouse mode for THIS session only. Without it, terminals that
