@@ -85,6 +85,39 @@ if [[ -z "$docker_bin" ]]; then
   exit 127
 fi
 
+# Reap orphaned shim-spawned containers. Long-running MCP servers
+# (e.g. `@playwright/mcp` under node:22) attach to a parent claude via
+# stdio. If claude dies with SIGKILL (container OOM, docker daemon
+# restart, ungraceful teardown), `docker run --rm` never fires and the
+# MCP container lingers indefinitely — 6 of those piled up on this box,
+# each ~100 MiB, contributing to the memory pressure that killed the
+# next claude session.
+#
+# We tag every container we spawn with a lineage label:
+#   com.claude-shim.parent-pid=<host PID>        (shim ran on host)
+#   com.claude-shim.parent-container=<name>      (shim ran inside a container)
+# On each shim invocation, before spawning a new container, sweep the
+# labels: kill anything whose parent PID no longer exists on the host,
+# or whose parent container is no longer running.
+_reap_shim_orphans() {
+    local cid pid pcont
+    while IFS=$'\t' read -r cid pid; do
+        [[ -n $cid && -n $pid ]] || continue
+        if ! kill -0 "$pid" 2>/dev/null; then
+            "$docker_bin" rm -f "$cid" >/dev/null 2>&1 || true
+        fi
+    done < <("$docker_bin" ps -a --filter "label=com.claude-shim.parent-pid" \
+             --format '{{.ID}}	{{.Label "com.claude-shim.parent-pid"}}' 2>/dev/null)
+    while IFS=$'\t' read -r cid pcont; do
+        [[ -n $cid && -n $pcont ]] || continue
+        if ! "$docker_bin" inspect -f '{{.State.Running}}' "$pcont" 2>/dev/null | grep -q true; then
+            "$docker_bin" rm -f "$cid" >/dev/null 2>&1 || true
+        fi
+    done < <("$docker_bin" ps -a --filter "label=com.claude-shim.parent-container" \
+             --format '{{.ID}}	{{.Label "com.claude-shim.parent-container"}}' 2>/dev/null)
+}
+_reap_shim_orphans
+
 # Per-tool image override: <NAME>_DOCKER_IMAGE (e.g. NODE_DOCKER_IMAGE, PIP3_DOCKER_IMAGE).
 name_uc="$(printf '%s' "$self" | tr 'a-z-' 'A-Z_')"
 img_var="${name_uc}_DOCKER_IMAGE"
@@ -109,6 +142,16 @@ case "$PWD" in
   *) run+=(-v "$PWD:$PWD") ;;
 esac
 run+=(-w "$PWD" -e DOCKER_SHIM_INNER=1 --entrypoint "${cmd[0]}")
+
+# Lineage label — see _reap_shim_orphans above. Prefer container
+# lineage when we're already inside a claude-review container (host
+# PPID is meaningless across the docker/host boundary).
+if [[ -n "${CLAUDE_REVIEW_CONTAINER_NAME:-}" ]]; then
+    run+=(--label "com.claude-shim.parent-container=$CLAUDE_REVIEW_CONTAINER_NAME")
+else
+    run+=(--label "com.claude-shim.parent-pid=$PPID")
+fi
+
 (( ${#extra[@]} )) && run+=("${extra[@]}")
 run+=("$image")
 (( ${#cmd[@]} > 1 )) && run+=("${cmd[@]:1}")
