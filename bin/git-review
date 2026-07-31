@@ -430,6 +430,12 @@ EOSH
 
 events_log="${TMPDIR:-/tmp}/git-review-events-$$.log"
 
+# Regex of signals to drop from the monitor. tmux forwards SIGWINCH
+# (28) into containers constantly on pane redraws — docker emits an
+# event=kill for each, drowning out the actually-terminating signals
+# we care about (SIGKILL=9, SIGTERM=15, SIGABRT=6, SIGINT=2, SIGQUIT=3).
+events_noise_re='sig=(1|17|18|20|21|22|23|28)( |$)'
+
 # Paper-trail before handoff.
 cat <<EOF
 → tmux session:    $session
@@ -452,7 +458,8 @@ EOF
 #                           oom/kill events on the same container
 monitor_cmd=$(cat <<EOSH
 log='$events_log'
-printf '\033[2m[docker events — die/kill/oom | log: %s]\033[0m\n' "\$log"
+noise='$events_noise_re'
+printf '\033[2m[docker events — die/kill(term)/oom | log: %s]\033[0m\n' "\$log"
 while :; do
     docker events \\
         --filter 'type=container' \\
@@ -460,6 +467,7 @@ while :; do
         --filter 'event=kill' \\
         --filter 'event=oom' \\
         --format '{{.Time}} {{.Action}}{{if .Actor.Attributes.signal}} sig={{.Actor.Attributes.signal}}{{end}}{{if .Actor.Attributes.exitCode}} exit={{.Actor.Attributes.exitCode}}{{end}} name={{.Actor.Attributes.name}}' 2>&1 \\
+        | grep --line-buffered -Ev "\$noise" \\
         | tee -a "\$log" || true
     printf '\033[2m[events stream ended — reconnecting in 3s]\033[0m\n'
     sleep 3
@@ -468,7 +476,21 @@ EOSH
 )
 
 # Build the four panes using pane IDs (survives base-index != 0).
+# CRITICAL: pass CLAUDE_REVIEW_* via `-e KEY=VAL`. tmux new-session
+# inherits env from the ATTACHED CLIENT (if we're inside an existing
+# tmux), NOT from the git-review shell running this script. Without
+# -e, a new pr643 pane picks up stale CLAUDE_REVIEW_CONTAINER_NAME
+# from a previously-attached pr1305 session — claude-in-docker's
+# reap-on-start then `docker rm -f`s the wrong container.
 main_pane=$(tmux new-session -d -s "$session" -c "$workdir" \
+    -e "CLAUDE_REVIEW_CONTAINER_NAME=$container_name" \
+    -e "CLAUDE_REVIEW_WORKDIR=$workdir" \
+    -e "CLAUDE_REVIEW_MODE=$mode" \
+    -e "CLAUDE_REVIEW_INTERACTIVE=$interactive" \
+    -e "CLAUDE_REVIEW_PR_URL=$pr_url" \
+    -e "CLAUDE_REVIEW_DOCKER=${CLAUDE_REVIEW_DOCKER:-0}" \
+    -e "CLAUDE_REVIEW_CACHE_DIR=${CLAUDE_REVIEW_CACHE_DIR:-}" \
+    -e "CLAUDE_REVIEW_EXTRA_MOUNTS=${CLAUDE_REVIEW_EXTRA_MOUNTS:-}" \
     -P -F '#{pane_id}' "$launch_cmd")
 compose_pane=$(tmux split-window -h -t "$main_pane" -c "$workdir" -l 40% \
     -P -F '#{pane_id}' "$compose_cmd")
