@@ -437,19 +437,40 @@ cat <<EOF
 → Peek read-only:  tmux attach -r -t $session
 EOF
 
-# Build the three panes using pane IDs (survives base-index != 0).
+# Docker events monitor — small strip below the main pane. Streams
+# container die + oom events so a killed claude session is visible
+# immediately with exit code (137 = SIGKILL, often kernel-VM OOM when
+# OOMKilled=false, or cgroup OOM when OOMKilled=true).
+monitor_cmd=$(cat <<'EOSH'
+printf '\033[2m[docker events — container die + oom will surface here]\033[0m\n'
+while :; do
+    docker events \
+        --filter 'type=container' \
+        --filter 'event=die' \
+        --filter 'event=oom' \
+        --format '{{.Time}} {{.Action}} {{.Actor.Attributes.name}} exit={{.Actor.Attributes.exitCode}}' 2>&1 || true
+    printf '\033[2m[events stream ended — reconnecting in 3s]\033[0m\n'
+    sleep 3
+done
+EOSH
+)
+
+# Build the four panes using pane IDs (survives base-index != 0).
 main_pane=$(tmux new-session -d -s "$session" -c "$workdir" \
     -P -F '#{pane_id}' "$launch_cmd")
 compose_pane=$(tmux split-window -h -t "$main_pane" -c "$workdir" -l 40% \
     -P -F '#{pane_id}' "$compose_cmd")
 shell_pane=$(tmux split-window -v -t "$compose_pane" -c "$workdir" -l 50% \
     -P -F '#{pane_id}' "$container_shell_cmd")
+monitor_pane=$(tmux split-window -v -t "$main_pane" -c "$workdir" -l 4 \
+    -P -F '#{pane_id}' "$monitor_cmd")
 
 tmux set-option -t "$session" mouse on 2>/dev/null || true
 tmux set-window-option -t "$main_pane" pane-border-status top 2>/dev/null || true
 tmux select-pane -t "$main_pane"    -T "claude"          2>/dev/null || true
 tmux select-pane -t "$compose_pane" -T "compose logs"    2>/dev/null || true
 tmux select-pane -t "$shell_pane"   -T "container shell" 2>/dev/null || true
+tmux select-pane -t "$monitor_pane" -T "docker events"   2>/dev/null || true
 tmux select-pane -t "$main_pane"
 
 # Prompt is baked into claude's argv via --prompt-file (see inner_cmd

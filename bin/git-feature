@@ -726,7 +726,24 @@ cat <<EOF
 → Haiku debug log:    $HAIKU_LOG
 EOF
 
-# Build the three-pane session. We use pane IDs (`%N`) rather than
+# Docker events monitor — small strip below the main pane. Streams
+# container die + oom events so a killed claude session is visible
+# immediately with exit code.
+monitor_cmd=$(cat <<'EOSH'
+printf '\033[2m[docker events — container die + oom will surface here]\033[0m\n'
+while :; do
+    docker events \
+        --filter 'type=container' \
+        --filter 'event=die' \
+        --filter 'event=oom' \
+        --format '{{.Time}} {{.Action}} {{.Actor.Attributes.name}} exit={{.Actor.Attributes.exitCode}}' 2>&1 || true
+    printf '\033[2m[events stream ended — reconnecting in 3s]\033[0m\n'
+    sleep 3
+done
+EOSH
+)
+
+# Build the four-pane session. We use pane IDs (`%N`) rather than
 # `session:window.pane` targets — the latter breaks if the user has
 # `base-index 1` set in their tmux.conf (window 0 doesn't exist there).
 # `-P -F '#{pane_id}'` makes each command print the id of the pane it
@@ -749,11 +766,16 @@ compose_pane=$(tmux split-window -h -t "$main_pane" -c "$repo" -l 40% \
 shell_pane=$(tmux split-window -v -t "$compose_pane" -c "$repo" -l 50% \
     -P -F '#{pane_id}' "$container_shell_cmd")
 
+# Bottom of main pane: docker events monitor, small strip (4 lines).
+monitor_pane=$(tmux split-window -v -t "$main_pane" -c "$repo" -l 4 \
+    -P -F '#{pane_id}' "$monitor_cmd")
+
 # Pane titles, if the tmux version supports pane-border-status.
 tmux set-window-option -t "$main_pane" pane-border-status top 2>/dev/null || true
 tmux select-pane -t "$main_pane"    -T "claude"          2>/dev/null || true
 tmux select-pane -t "$compose_pane" -T "compose logs"    2>/dev/null || true
 tmux select-pane -t "$shell_pane"   -T "container shell" 2>/dev/null || true
+tmux select-pane -t "$monitor_pane" -T "docker events"   2>/dev/null || true
 
 # Focus back on the claude pane before handing over. The prompt is
 # already baked into claude's argv (--prompt-file) so nothing more to
