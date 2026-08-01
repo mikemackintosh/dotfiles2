@@ -1,4 +1,5 @@
 {
+  "model": "opus[1m]",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [
@@ -21,11 +22,13 @@
     "gopls-lsp@claude-plugins-official": true,
     "swift-lsp@claude-plugins-official": true
   },
-  "extraKnownMarketplaces": {},
+  "extraKnownMarketplaces": {
+    "swift-lsp@claude-plugins-official": true
+  },
+  "skipWorkflowUsageWarning": true,
   "theme": "dark",
   "deny": [
     "Bash(gh)",
     "Bash(gh *)"
-  ],
-  "skipWorkflowUsageWarning": true
+  ]
 }
