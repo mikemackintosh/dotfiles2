@@ -1,3 +1,7 @@
+# Global aliases for chaining commands: `command1 and command2`, `command1 or command2`
+alias -g and='&&'
+alias -g or='||'
+
 # ls
 if command -v eza &>/dev/null; then
   alias ls=eza

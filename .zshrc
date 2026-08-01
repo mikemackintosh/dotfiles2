@@ -76,6 +76,7 @@ extra_sources=(
     $HOME/.dotfiles/bin
     "${GOPATH}/bin"
     /opt/homebrew/bin/
+    /opt/homebrew/opt/libpq/bin
 )
 export PATH="${(j.:.)extra_sources}:$STD_PATH"
 
@@ -171,9 +172,3 @@ bindkey ' ' _space_accept_or_self
 
 # zsh-syntax-highlighting: MUST be sourced last (hooks into ZLE)
 source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
-
-# eval "$(mise activate zsh)"
-
-# Global aliases for chaining commands: `command1 and command2`, `command1 or command2`
-alias -g and='&&'
-alias -g or='||'
