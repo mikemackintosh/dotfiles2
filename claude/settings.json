@@ -22,9 +22,6 @@
     "gopls-lsp@claude-plugins-official": true,
     "swift-lsp@claude-plugins-official": true
   },
-  "extraKnownMarketplaces": {
-    "swift-lsp@claude-plugins-official": true
-  },
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
   "deny": [
