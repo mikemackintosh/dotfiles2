@@ -8,6 +8,10 @@
           {
             "type": "command",
             "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"mcplocker memory: This session can use the mcplocker MCP memory tools (mcp__mcplocker__memory_recall, mcp__mcplocker__memory_save, mcp__mcplocker__memory_search, mcp__mcplocker__memory_forget), which are deferred behind ToolSearch. At the start of a task, call memory_recall to pull relevant prior context. When you learn a durable fact about the user or their work, call memory_save. Use memory_search for lookups. ToolSearch for these tool names first if their schemas are not loaded.\"}}'"
+          },
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"Why-first framing: Mike prefers requests shaped as [goal] because [constraint]. Do [specific thing]. If a prompt is missing the why AND the missing context would change your approach (not just cosmetic wording), ask ONE focused question before acting rather than guessing. If the why is present or the ask is small/reversible, just do it — do not stall on clarification for trivial work. When Mike prefixes a prompt with why:, context:, or answers what-breaks / who-is-reader / what-constraint, treat that as the load-bearing framing.\"}}'"
           }
         ]
       }
