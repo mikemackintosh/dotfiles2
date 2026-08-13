@@ -44,8 +44,11 @@ fi
 # first element becomes the container --entrypoint (this neutralizes any
 # ENTRYPOINT baked into images like denoland/deno); the rest are prepended to
 # the user's arguments.
+# `env` holds NAME=VALUE pairs to pass through with -e (nothing is inherited
+# from the host otherwise).
 image_default=""
 cmd=()
+env=()
 case "$self" in
   node|npm|npx|corepack|yarn) image_default="node:22" ; cmd=("$self") ;;
   # pnpm isn't preinstalled; activate it via the bundled corepack into a
@@ -67,6 +70,30 @@ case "$self" in
   poetry)               image_default="ghcr.io/astral-sh/uv:python3.12-bookworm-slim" ; cmd=(uvx poetry) ;;
   ruby|gem|irb)         image_default="ruby:3.3-slim"                          ; cmd=("$self") ;;
   bundle|bundler)       image_default="ruby:3.3-slim"                          ; cmd=(bundle) ;;
+  # JetBrains publishes no Kotlin image, and the community ones aren't worth
+  # trusting, so bootstrap the official release zip into a $HOME-mounted cache on
+  # top of a plain JDK (checksum-verified, downloaded once per version).
+  kotlinc|kotlin|kotlinc-jvm|kotlinc-js|kotlinc-wasm|kotlinr|kapt)
+    image_default="eclipse-temurin:21-jdk"
+    env=(KOTLIN_VERSION="${KOTLIN_VERSION:-2.4.10}")
+    cmd=(sh -c '
+      set -e
+      root="$HOME/.cache/kotlin-compiler/$KOTLIN_VERSION"
+      if [ ! -x "$root/kotlinc/bin/$0" ]; then
+        url="https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION/kotlin-compiler-$KOTLIN_VERSION.zip"
+        tmp="$root/.tmp.$$"
+        rm -rf "$tmp"; mkdir -p "$tmp"
+        echo "$0(shim): fetching kotlin-compiler $KOTLIN_VERSION" >&2
+        curl -fsSL -o "$tmp/k.zip" "$url"
+        echo "$(curl -fsSL "$url.sha256")  $tmp/k.zip" | sha256sum -c - >/dev/null
+        cd "$tmp"
+        jar xf k.zip                     # the JDK image has no unzip
+        chmod +x kotlinc/bin/*           # jar, unlike unzip, drops the exec bit
+        cd - >/dev/null
+        mv "$tmp/kotlinc" "$root/kotlinc" 2>/dev/null || true   # lost a race: keep theirs
+        rm -rf "$tmp"
+      fi
+      exec "$root/kotlinc/bin/$0" "$@"' "$self") ;;
   *)
     echo "docker-shim: don't know how to run '$self' — add it to the case in $0." >&2
     exit 127 ;;
@@ -141,7 +168,9 @@ case "$PWD" in
   "$HOME"|"$HOME"/*) : ;;
   *) run+=(-v "$PWD:$PWD") ;;
 esac
-run+=(-w "$PWD" -e DOCKER_SHIM_INNER=1 --entrypoint "${cmd[0]}")
+run+=(-w "$PWD" -e DOCKER_SHIM_INNER=1)
+for e in ${env[@]+"${env[@]}"}; do run+=(-e "$e"); done
+run+=(--entrypoint "${cmd[0]}")
 
 # Lineage label — see _reap_shim_orphans above. Prefer container
 # lineage when we're already inside a claude-review container (host

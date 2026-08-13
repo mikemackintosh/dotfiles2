@@ -260,12 +260,23 @@ DOCKER_SHIM_ARGS='--network host' npm test    # extra docker run args
 | `python3` `python` `pip3` `pip`       | `python:3.12-slim`                         |
 | `uv` `uvx` `poetry`                   | `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` |
 | `ruby` `gem` `bundle` `bundler` `irb` | `ruby:3.3-slim`                            |
+| `kotlinc` `kotlin` `kotlinc-jvm` `kotlinc-js` `kotlinc-wasm` `kotlinr` `kapt` | `eclipse-temurin:21-jdk` (+ official compiler zip) |
 
 Per-tool image override: `<NAME>_DOCKER_IMAGE` (e.g. `PIP3_DOCKER_IMAGE=python:3.12`).
 Extra `docker run` args: `DOCKER_SHIM_ARGS` (all tools) or `<NAME>_DOCKER_ARGS`.
 The `-slim` Python/Ruby images can't compile native extensions — override the
 image for those. Add a tool by extending the `case` in `bin/docker-shim` and the
 symlink loop in `install.sh`.
+
+There's no official JetBrains Kotlin image, so the Kotlin shims run a plain JDK
+and bootstrap JetBrains' own `kotlin-compiler-<ver>.zip` into
+`~/.cache/kotlin-compiler/` on first use, verifying the published SHA-256. Pin a
+different version with `KOTLIN_VERSION=2.1.20 kotlinc -version`.
+
+```sh
+kotlinc hello.kt -include-runtime -d hello.jar && kotlin hello.jar
+kotlinc -script build.kts
+```
 
 ### `k` — kubectl in Docker (`zsh/kube.zsh`)
 
