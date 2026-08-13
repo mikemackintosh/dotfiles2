@@ -161,7 +161,8 @@ chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
 # the host on purpose. Self-heal the links in case any went missing.
 for t in node npm npx yarn pnpm corepack bun deno \
          python3 python pip3 pip uv uvx poetry \
-         ruby gem bundle bundler irb; do
+         ruby gem bundle bundler irb \
+         kotlinc kotlin kotlinc-jvm kotlinc-js kotlinc-wasm kotlinr kapt; do
     ln -sf docker-shim "$DOTFILES/bin/$t"
 done
 
