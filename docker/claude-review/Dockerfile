@@ -40,15 +40,35 @@ RUN set -eux; \
 # platform-native `claude` binary — skip it and `claude` errors out
 # with "claude native binary not installed" at runtime.
 #
-# The manual `node install.cjs` at the end is a belt-and-suspenders
-# fallback in case the CLI flag doesn't fully override the npmrc
-# on some npm versions.
+# The platform binary ships as an *optional* dependency
+# (@anthropic-ai/claude-code-linux-arm64 etc, ~280 MB). npm treats a
+# failed optional dep as success — it just logs "reify failed optional
+# dependency" and prints "added 1 package". Behind a corporate Nexus
+# proxy a cold-cache fetch of that tarball routinely stalls or drops,
+# so the build silently loses `claude`'s binary and only blows up at
+# the `claude --version` smoke test. Hence: retry the install, then
+# install the native package *explicitly* as a direct dep so any
+# remaining failure is loud instead of silent. Node resolves it from
+# /usr/local/lib/node_modules just as well as from the nested path.
+#
+# The manual `node install.cjs` is a belt-and-suspenders fallback in
+# case --ignore-scripts=false doesn't fully override the npmrc.
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
     set -eux; \
-    npm install -g --ignore-scripts=false @anthropic-ai/claude-code; \
-    if [ -f /usr/local/lib/node_modules/@anthropic-ai/claude-code/install.cjs ]; then \
-        node /usr/local/lib/node_modules/@anthropic-ai/claude-code/install.cjs || true; \
-    fi; \
+    export npm_config_fetch_retries=5 \
+           npm_config_fetch_retry_maxtimeout=120000 \
+           npm_config_fetch_timeout=600000; \
+    for attempt in 1 2 3; do \
+        npm install -g --ignore-scripts=false @anthropic-ai/claude-code && break; \
+        echo "npm install attempt $attempt failed; retrying"; sleep 5; \
+    done; \
+    pkg=/usr/local/lib/node_modules/@anthropic-ai/claude-code; \
+    ver=$(node -p "require('$pkg/package.json').version"); \
+    native="@anthropic-ai/claude-code-linux-$(node -p process.arch)"; \
+    node -e "require.resolve('$native/package.json',{paths:['$pkg']})" \
+        || npm install -g --ignore-scripts=false "$native@$ver"; \
+    if [ -f "$pkg/install.cjs" ]; then node "$pkg/install.cjs" || true; fi; \
     claude --version
 
 ENTRYPOINT ["/usr/bin/dumb-init","--"]
