@@ -183,6 +183,14 @@ if [[ -n $container_name ]]; then
 
     # Fresh empty lockfile — claude flocks its own copy, not the host's.
     : > "$_cc_dir/scheduled_tasks.lock"
+
+    # The TARGET must already exist. This is a nested bind mount: it
+    # lands inside the ~/.claude mount above, so runc would have to
+    # create the mountpoint inside virtiofs, which Docker Desktop
+    # rejects with "mountpoint ... is outside of rootfs" → exit 125.
+    # Pre-creating the file on the host removes the create step.
+    # Never truncate an existing one — host claude flocks it too.
+    [[ -e $HOME/.claude/scheduled_tasks.lock ]] || : > "$HOME/.claude/scheduled_tasks.lock"
     run+=(-v "$_cc_dir/scheduled_tasks.lock:$HOME/.claude/scheduled_tasks.lock")
 
     # Per-container .claude.json seeded from the host's current copy so
