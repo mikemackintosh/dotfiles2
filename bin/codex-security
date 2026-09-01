@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# codex-security — OpenAI Codex Security scans, through the npx docker-shim.
+#
+# Usage:
+#   codex-security <args...>            # forwarded verbatim to `npx codex-security`
+#
+# Examples:
+#   codex-security scan --path .
+#   codex-security login
+#
+# Why the wrapper: `npx` on this box is bin/docker-shim, so codex-security and
+# the Codex binary it drives run inside node:22 — i.e. Linux. Codex on Linux
+# wraps every shell command it issues in its bundled bubblewrap, which needs an
+# unprivileged user namespace; Docker's default seccomp profile blocks the clone
+# flags for that. Result without the relaxation below: every exec_command inside
+# the scan returns "bwrap: No permissions to create a new namespace", the agent
+# never runs a command, writes no scan-manifest.json/findings.json/coverage.json,
+# and the run dies with "Scan agent did not create required draft artifacts".
+# seccomp=unconfined alone is sufficient — SYS_ADMIN is not needed.
+
+set -euo pipefail
+
+export NPX_DOCKER_ARGS="--security-opt seccomp=unconfined${NPX_DOCKER_ARGS:+ $NPX_DOCKER_ARGS}"
+
+exec npx codex-security "$@"

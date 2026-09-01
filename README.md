@@ -223,6 +223,25 @@ macos-defaults
 
 Requires `dockutil` (in the Brewfile).
 
+### `codex-security` — Codex Security scans that survive the shim
+
+Thin wrapper over `npx codex-security`; all arguments pass straight through.
+
+```sh
+codex-security scan --path .
+codex-security login
+```
+
+It exists only to add `--security-opt seccomp=unconfined` to the `npx` shim's
+`docker run`. Since `npx` is containerized, `npm install @openai/codex-security`
+pulls the **Linux** build (`@openai/codex-linux-arm64`), and Codex on Linux
+sandboxes each shell command with its bundled `bwrap`. Creating a user namespace
+is blocked by Docker's default seccomp profile, so every command the scan agent
+runs fails with `bwrap: No permissions to create a new namespace`; it writes no
+artifacts and the scan ends with "did not create required draft artifacts".
+Dropping the seccomp profile widens the container's escape surface — the trade
+is accepted because it's what lets Codex build its own inner sandbox at all.
+
 ## Containerized CLIs (Docker)
 
 Whole language toolchains are deliberately **not** installed on the host — they
@@ -363,3 +382,45 @@ Leader is `<space>`. The interesting bindings (full set in `vim/vimrc`):
   goes through MCP tools.
 - Status line is `claude/statusline.sh`, which renders dir / git branch /
   model / context-window percent / token + cost counters.
+
+Three more files are symlinked into `~/.claude/` by `install.sh`:
+
+### `claude/CLAUDE.md` — global answer style
+
+Applies to every project: lead with the answer, separate proven from predicted,
+name a ticket the first time rather than leaving a bare `#123`, and the shell
+shapes that are never acceptable. The last section is what `bash-guard.sh`
+enforces mechanically.
+
+### `claude/bash-guard.sh` — a `PreToolUse` gate on Bash
+
+Reads the hook payload on stdin and either stays silent (command proceeds
+through normal permissions) or returns a `deny` / `ask` decision.
+
+| Shape | Decision | Why |
+| --- | --- | --- |
+| `git stash` | deny | Moves work somewhere easy to forget; commit instead, then `git checkout HEAD -- <path>` |
+| `… \|\| cp/mv <backup>` | deny | The fallback only runs when the first command *fails*, so the later restore has nothing to restore from |
+| pipe feeding `&&` a state change | deny | A pipeline reports its *last* stage, so a trailing `grep` masks the real failure and the `&&` still fires |
+| `git reset --hard/--merge/--keep` | ask | Discards uncommitted work irrecoverably |
+| bare `git checkout -- <path>` | ask | Same effect as the HEAD form but doesn't say what it restores *to* |
+| `git push --force` / `-f` | ask | Rewrites remote history |
+| `rm -rf` | ask | Irreversible and silent |
+
+Two deliberate design points. Matching is **syntactic** — "does this string
+contain `stash`" — because the judgement needed for a semantic test is exactly
+what is missing in the moment the bad command gets written. And quoted runs are
+stripped before matching, so an `echo` or `grep` pattern that merely *names* one
+of these shapes doesn't trip the guard. `git checkout HEAD -- <path>` is
+explicitly **not** gated: it's the restore idiom the guard pushes you toward,
+and friction on the recommended path is how you end up back at ad-hoc `.bak`
+files.
+
+### `claude/prompts/security-review.md` — branded assessment report
+
+Prompt template for a full security review: severity rubric with EPSS plus a
+modeled exploitation-probability estimate, a self-contained fix brief per
+finding, an ethics gate for any live validation (owned accounts only, no
+enumeration, scrub recovered secrets at teardown), and a self-contained HTML
+report skeleton. See also `docs/android-skills.md` for the Android/Frida lab
+cold-start runbook it assumes.

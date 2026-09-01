@@ -26,6 +26,8 @@ PAIRS=(
     "ghostty/themes          $HOME/.config/ghostty/themes"
     "claude/statusline.sh    $HOME/.claude/statusline.sh"
     "claude/settings.json    $HOME/.claude/settings.json"
+    "claude/CLAUDE.md        $HOME/.claude/CLAUDE.md"
+    "claude/bash-guard.sh    $HOME/.claude/bash-guard.sh"
 )
 
 link() {
@@ -152,7 +154,8 @@ chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
          "$DOTFILES/bin/tmux-status-right" "$DOTFILES/bin/docker-shim" \
          "$DOTFILES/bin/claude-in-docker" "$DOTFILES/bin/gen-compose-override" \
          "$DOTFILES/bin/claude-doctor" "$DOTFILES/bin/claude-clean" \
-         "$DOTFILES/bin/claude-attach" \
+         "$DOTFILES/bin/claude-attach" "$DOTFILES/bin/codex-security" \
+         "$DOTFILES/claude/bash-guard.sh" \
          "$DOTFILES/docker/claude-review/cc-status-stub" \
          "$DOTFILES/githooks/pre-push" "$DOTFILES/githooks/pre-commit"
 
