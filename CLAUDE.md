@@ -38,6 +38,7 @@ bin/                                      → user scripts (on $PATH)
   git-feature                               new feature/bug branch + containerized claude in tmux
   pr-spin                                   back-compat symlink → git-feature
   claude-in-docker                          runs claude with narrow host mounts (safe --dangerously-*)
+  codex-security                            npx codex-security + seccomp=unconfined (bwrap needs it)
   gen-compose-override                      randomizes docker-compose ports per PR/branch
   notify                                    osascript notification wrapper
   macos-defaults                            apply scrolling / cursor / Dock prefs
@@ -46,11 +47,17 @@ bin/                                      → user scripts (on $PATH)
 claude/                                   → Claude Code config
   settings.json                             symlinked into ~/.claude/
   statusline.sh                             symlinked into ~/.claude/
+  CLAUDE.md                                 symlinked into ~/.claude/ (global
+                                            answer-style + shell rules)
+  bash-guard.sh                             symlinked into ~/.claude/;
+                                            PreToolUse Bash gate (see below)
   prompts/                                  workflow prompt templates
+    security-review.md                        branded security-assessment report
 docker/                                   → Dockerfiles built by our tools
   claude-review/                            base image for claude-in-docker
 docs/                                     → per-tool deep-dive docs
   git-review.md, git-feature.md             ← start here to learn a tool
+  android-skills.md                         Android/Frida lab cold-start runbook
 githooks/                                 → global hooks (core.hooksPath)
   pre-commit                                gofmt + go vet on staged .go files
   pre-push                                  gitleaks on push
@@ -91,6 +98,12 @@ expected on machines that haven't run `brew bundle`.
 - `~/.dotfiles/bin` is on `$PATH` (set in `.zshrc`). Any new script
   there is auto-callable from anywhere; `install.sh` chmod's the
   ones it knows about.
+- `claude/bash-guard.sh` is a `PreToolUse` hook on Bash. It **denies**
+  `git stash`, `… || cp/mv` fallback backups, and a pipe feeding `&&`
+  into a state change; it **asks** on `reset --hard`, bare
+  `git checkout -- <path>`, force-push and `rm -rf`. Matching is
+  syntactic, on the command string with quoted runs stripped, so a
+  command that merely names one of these does not trip it.
 
 ## Conventions for new tools
 

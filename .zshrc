@@ -170,5 +170,7 @@ _space_accept_or_self() {
 zle -N _space_accept_or_self
 bindkey ' ' _space_accept_or_self
 
+export SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt
+
 # zsh-syntax-highlighting: MUST be sourced last (hooks into ZLE)
 source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh

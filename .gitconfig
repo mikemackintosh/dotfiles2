@@ -103,6 +103,9 @@
   insteadOf = brew:
   insteadOf = ssh://git@github.com:homebrew
 
+[url "ssh://git@rocketbox.ai/"]
+  insteadOf = https://rocketbox.ai/
+
 # Per-OS overrides — no-op if the target file is absent.
 [IncludeIf "gitdir:/Users"]
   path = ~/.gitconfig-osx
@@ -124,3 +127,8 @@
 # the work email automatically, without a pre-commit guard.
 [includeIf "gitdir:~/go/src/github.com/wealthsimple/"]
   path = ~/.private/gitconfig-work
+
+# The signing key itself lives in ~/.private/gitconfig; only the
+# verification list is safe to commit. Must sit after [include] to win.
+[gpg "ssh"]
+  allowedSignersFile = ~/.config/git/allowed_signers

@@ -11,6 +11,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/bash-guard.sh",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   },
   "statusLine": {
@@ -24,6 +36,7 @@
   },
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
+  "agentPushNotifEnabled": true,
   "deny": [
     "Bash(gh)",
     "Bash(gh *)"
