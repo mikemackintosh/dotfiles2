@@ -92,3 +92,40 @@ feeding `&&` — stop and write it properly, even when it's only scaffolding.
   flag and I read the non-zero exit as a test failure. State which control I ran, so a bad one is
   visible to you.
 - **If I broke it, say so first** — before any mitigation or context.
+
+## Screenshots and browser automation
+
+`node`, `npx`, `python3` (and friends) are docker shims — `~/.dotfiles/bin/docker-shim`. They
+run in a Linux container with no browser and **no route to the Mac's loopback**, so
+`npx playwright test` cannot launch a browser and the stock `npx chrome-devtools-mcp` cannot
+either. Do not "fix" that by installing node natively, by `--network host` (still cannot reach
+127.0.0.1 on the Mac), or by binding Chrome's debug port to 0.0.0.0.
+
+**Use the `chrome-devtools` MCP.** It is `~/.dotfiles/bin/chrome-devtools-mcp`, registered by
+`install.sh`: chrome-devtools-mcp inside the Playwright image, headless Chromium, 1440x900.
+
+1. Navigate to `http://localhost:<port>` — **never `127.0.0.1`**. Inside that browser
+   "localhost" is remapped to the Docker host gateway; an IP literal bypasses the remap.
+   Vite's host check passes because the Host header is still `localhost`.
+2. `take_screenshot` with a `filePath` under `$HOME`; only `$HOME` and `$PWD` are mounted.
+3. A sign-in that bounces to a real IdP will not complete in there. Use the project's local
+   stub login if it has one, or take the CDP route below and inject the session cookie.
+   Never paste a production cookie into a screenshot session.
+
+**Fallback — drive the native Chrome over CDP from Go.** Go and `/Applications/Google
+Chrome.app` are native; python is not, so no Python CDP clients. Loopback only:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+  --remote-debugging-port=9333 --user-data-dir="$TMPDIR/chrome-cdp" \
+  --window-size=1440,900 --hide-scrollbars --no-first-run about:blank &
+curl -s http://127.0.0.1:9333/json      # page targets; dial webSocketDebuggerUrl
+```
+
+About 150 lines of Go with `github.com/gorilla/websocket` covers it: `Network.setCookie` from
+a Playwright storage-state file, `Emulation.setDeviceMetricsOverride` (deviceScaleFactor 2
+for crops), `Page.navigate`, poll `Runtime.evaluate`, `Page.captureScreenshot` with `clip`.
+Reuse a project's own capture command (look in `cmd/`) before writing another.
+
+**Marketing screenshots are never hand-taken from a real tenant.** Capture from the seeded
+or generated org, assert that in the script before every frame, and say so in the caption.

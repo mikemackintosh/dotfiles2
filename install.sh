@@ -155,6 +155,7 @@ chmod +x "$DOTFILES/claude/statusline.sh" "$DOTFILES/install.sh" \
          "$DOTFILES/bin/claude-in-docker" "$DOTFILES/bin/gen-compose-override" \
          "$DOTFILES/bin/claude-doctor" "$DOTFILES/bin/claude-clean" \
          "$DOTFILES/bin/claude-attach" "$DOTFILES/bin/codex-security" \
+         "$DOTFILES/bin/chrome-devtools-mcp" \
          "$DOTFILES/claude/bash-guard.sh" \
          "$DOTFILES/docker/claude-review/cc-status-stub" \
          "$DOTFILES/githooks/pre-push" "$DOTFILES/githooks/pre-commit"
@@ -168,6 +169,19 @@ for t in node npm npx yarn pnpm corepack bun deno \
          kotlinc kotlin kotlinc-jvm kotlinc-js kotlinc-wasm kotlinr kapt; do
     ln -sf docker-shim "$DOTFILES/bin/$t"
 done
+
+# Browser MCP for Claude Code. Because node is a shim, the stock
+# `npx chrome-devtools-mcp@latest` runs in a container with no Chrome and no
+# route to the Mac's loopback; bin/chrome-devtools-mcp runs it in the Playwright
+# image instead (headless Chromium, "localhost" mapped to the host). Declarative:
+# drop whatever definition exists, then add this one, so re-running converges.
+# User scope, so every project gets it; claude/CLAUDE.md says how to use it.
+if command -v claude >/dev/null 2>&1; then
+    if claude mcp get chrome-devtools >/dev/null 2>&1; then
+        claude mcp remove chrome-devtools >/dev/null
+    fi
+    claude mcp add --scope user chrome-devtools -- "$DOTFILES/bin/chrome-devtools-mcp"
+fi
 
 # Install Homebrew if missing, then materialize the Brewfile.
 if ! command -v brew >/dev/null 2>&1; then
