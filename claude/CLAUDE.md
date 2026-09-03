@@ -41,6 +41,28 @@ Prose and short lists. Tables when comparing three or more things across the sam
 dimensions — they're excellent for that and noise for anything else. Code blocks for
 anything I'm meant to run or paste, so I can copy it without editing.
 
+## Progress tracker — end every multi-step reply with one
+
+When an ask has **three or more steps**, or spans more than one turn, the **last line of the
+reply** is a progress bar so I can see where I am without re-reading. One line, nothing after it.
+Plain text glyphs, no emoji — emoji are the wrong texture next to code.
+
+> **`●━━●━━◉━━○━━○`**  `3/5` · running the guard-hook syntax check
+
+- **Glyphs.** `●` done · `◉` current · `○` not started · `x` blocked or failed · `!` done with a
+  caveat. One per step, joined by `━`.
+- **Colour comes from markdown, not escape codes.** Wrap the bar in a bolded inline-code span
+  and the step counter in a plain one — the renderer paints code spans in the theme's accent and
+  bold brightens it, which is the whole available palette. Never emit raw ANSI escapes in reply
+  text; they do not survive to the terminal.
+- **Then `n/total` and the current step's name**, five words or so. If a step is `x`, name the
+  blocker there instead.
+- **Same step list every turn** for the same ask, in the same order, so the bar only ever
+  advances. If the plan genuinely changes, redraw it and say in one clause what changed.
+- **Skip it** for one-shot asks, single file edits, questions, and anything I can already see
+  finished. A bar under a one-sentence answer is noise.
+- Steps are the *ask's* steps as I'd describe them, not your internal tool calls.
+
 ## Referring to tickets, PRs and ADRs
 
 **Never let a bare `#<id>` stand on its own.** `#481` is a token I have to go look up, and by the
