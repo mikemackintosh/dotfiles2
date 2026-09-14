@@ -40,5 +40,6 @@
   "deny": [
     "Bash(gh)",
     "Bash(gh *)"
-  ]
+  ],
+  "tui": "fullscreen"
 }

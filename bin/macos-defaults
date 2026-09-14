@@ -1,101 +1,231 @@
 #!/usr/bin/env bash
 # macos-defaults — apply Mike's macOS system preferences.
 #
-# Idempotent; safe to re-run. Cursor color changes need a logout
-# (or a toggle of System Settings → Accessibility → Display →
-# Pointer) before the new colors render.
+# Idempotent and non-fatal: a step that can't run (missing tool, missing
+# permission, macOS too old) is skipped and reported in the summary; it
+# never takes the remaining steps down with it.
+#
+# Version support: Monterey (12) through Tahoe (26). Anything that moved
+# between releases is branched on $MAJOR explicitly — see the cursor
+# section, where Sequoia changed the plist schema outright.
 #
 # Usage:
-#   macos-defaults
+#   macos-defaults                 apply, then offer to log out
+#   macos-defaults --no-logout     apply only (used by install.sh)
+#   macos-defaults --dry-run       print what would change
 
 set -euo pipefail
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "macos-defaults: not on macOS" >&2
+LOGOUT=1
+DRY=0
+for arg in "$@"; do
+    case "$arg" in
+        --no-logout) LOGOUT=0 ;;
+        --dry-run)   DRY=1; LOGOUT=0 ;;
+        -h|--help)   sed -n '2,20p' "$0"; exit 0 ;;
+        *) echo "macos-defaults: unknown option $arg" >&2; exit 2 ;;
+    esac
+done
+
+bold=$'\033[1m'; green=$'\033[32m'; yellow=$'\033[33m'; reset=$'\033[0m'
+[[ -t 1 ]] || { bold=; green=; yellow=; reset=; }
+
+SKIPPED=()
+step() { printf '\n%s%s%s\n' "$bold" "$*" "$reset"; }
+ok()   { printf '  %sok%s   %s\n' "$green" "$reset" "$*"; }
+skip() { printf '  %sskip%s %s\n' "$yellow" "$reset" "$1" >&2; SKIPPED+=("$1"); }
+run()  { if (( DRY )); then printf '  would: %s\n' "$*"; else "$@"; fi; }
+
+[[ "$(uname -s)" == "Darwin" ]] || { echo "macos-defaults: not on macOS" >&2; exit 1; }
+
+# Under sudo, $HOME is /var/root: every `defaults write` and dockutil call
+# below would configure root's account instead of yours, silently. Refuse.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    echo "macos-defaults: do not run this with sudo." >&2
+    echo "  sudo sets HOME=/var/root, so the Dock and every 'defaults write'" >&2
+    echo "  land in root's preferences. None of these settings need root." >&2
     exit 1
 fi
 
-echo "Trackpad: enable natural scrolling, tap-to-click, tap-drag..."
-defaults write -g com.apple.swipescrolldirection -bool true
+VERSION="$(sw_vers -productVersion)"
+MAJOR="${VERSION%%.*}"
+echo "${bold}macOS $VERSION${reset} (major $MAJOR)"
+
+if (( MAJOR < 12 )); then
+    echo "macos-defaults: macOS 12 (Monterey) or newer required; found $VERSION" >&2
+    exit 1
+fi
+if (( MAJOR > 26 )); then
+    echo "  note: macOS $MAJOR is newer than this script has been tested on."
+    echo "  Settings that moved will be reported as skipped, not applied wrongly."
+fi
+
+# --------------------------------------------------------------- trackpad
+
+step "Trackpad: natural scrolling, tap-to-click, tap-drag"
+run defaults write -g com.apple.swipescrolldirection -bool true
 # Tap-to-click + tap-drag (without drag lock). Each setting needs both
 # driver domains (built-in trackpad + bluetooth trackpad). Tap-to-click
 # also needs the user-level global; System Settings flips both.
-defaults write com.apple.AppleMultitouchTrackpad                 Clicking -bool true
-defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Clicking -bool true
-defaults write com.apple.AppleMultitouchTrackpad                 Dragging -bool true
-defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Dragging -bool true
-defaults write com.apple.AppleMultitouchTrackpad                 DragLock -bool false
-defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad DragLock -bool false
-defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
-defaults              write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
+for domain in com.apple.AppleMultitouchTrackpad \
+              com.apple.driver.AppleBluetoothMultitouch.trackpad; do
+    run defaults write "$domain" Clicking -bool true
+    run defaults write "$domain" Dragging -bool true
+    run defaults write "$domain" DragLock -bool false
+done
+run defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
+run defaults              write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
+ok "trackpad"
 
-echo "Accessibility: bright green cursor (#95ef00) with orange (#ff7f00) outline..."
-# Sequoia (15+) stores cursor colors as nested dicts of named reals
-# and gates the whole thing on a cursorIsCustomized bool. Pre-Sequoia
-# used cursorFillColor/cursorOutlineColor as RGBA arrays — those keys
-# are no longer read, so we clean them up if found. The domain is
-# TCC-protected; the terminal app (not the user) needs Full Disk
-# Access. plutil edits the file directly, then we kick cfprefsd so it
-# drops its cached copy.
-ua_plist="$HOME/Library/Preferences/com.apple.universalaccess.plist"
-if  plutil -replace cursorFill            -json '{"red":0.584314,"green":0.937255,"blue":0.0,"alpha":1.0}' "$ua_plist" 2>/dev/null \
- && plutil -replace cursorOutline         -json '{"red":1.0,"green":0.498039,"blue":0.0,"alpha":1.0}'      "$ua_plist" 2>/dev/null \
- && plutil -replace cursorIsCustomized    -bool true "$ua_plist" 2>/dev/null \
- && plutil -replace mouseDriverCursorSize -json 2.5  "$ua_plist" 2>/dev/null; then
-    plutil -remove cursorFillColor    "$ua_plist" 2>/dev/null || true
-    plutil -remove cursorOutlineColor "$ua_plist" 2>/dev/null || true
-    killall cfprefsd 2>/dev/null || true
-    cursor_set=1
+# ----------------------------------------------------------------- cursor
+
+step "Accessibility: bright green cursor (#95ef00) with orange (#ff7f00) outline"
+# The universalaccess domain is TCC-protected: the *terminal app* (not the
+# user, and not sudo) needs Full Disk Access to write it. Probe first so the
+# failure reads as a permission problem rather than a plist error.
+UA="$HOME/Library/Preferences/com.apple.universalaccess.plist"
+cursor_set=0
+if ! ls "$HOME/Library/Application Support/com.apple.TCC" >/dev/null 2>&1; then
+    skip "cursor colors — ${TERM_PROGRAM:-this terminal} lacks Full Disk Access.
+       System Settings → Privacy & Security → Full Disk Access, add it,
+       quit and reopen the terminal, then re-run: macos-defaults"
+elif (( DRY )); then
+    echo "  would: rewrite $UA cursor keys"
+elif (( MAJOR >= 15 )); then
+    # Sequoia (15) and later store cursor colors as nested dicts of named
+    # reals, gated on a cursorIsCustomized bool. The pre-Sequoia
+    # cursorFillColor/cursorOutlineColor arrays are no longer read.
+    if plutil -replace cursorFill            -json '{"red":0.584314,"green":0.937255,"blue":0.0,"alpha":1.0}' "$UA" 2>/dev/null \
+    && plutil -replace cursorOutline         -json '{"red":1.0,"green":0.498039,"blue":0.0,"alpha":1.0}'      "$UA" 2>/dev/null \
+    && plutil -replace cursorIsCustomized    -bool true "$UA" 2>/dev/null \
+    && plutil -replace mouseDriverCursorSize -json 2.5  "$UA" 2>/dev/null; then
+        plutil -remove cursorFillColor    "$UA" 2>/dev/null || true
+        plutil -remove cursorOutlineColor "$UA" 2>/dev/null || true
+        cursor_set=1
+    fi
 else
-    cursor_set=0
-    echo "  skipped — terminal lacks permission to write $ua_plist." >&2
-    echo "  Grant Full Disk Access in System Settings → Privacy & Security," >&2
-    echo "  add your terminal app, restart it, and re-run macos-defaults." >&2
+    # Monterey (12) through Sonoma (14): RGBA arrays of reals, no gate bool.
+    if plutil -replace cursorFillColor       -json '[0.584314,0.937255,0.0,1.0]' "$UA" 2>/dev/null \
+    && plutil -replace cursorOutlineColor    -json '[1.0,0.498039,0.0,1.0]'      "$UA" 2>/dev/null \
+    && plutil -replace mouseDriverCursorSize -json 2.5 "$UA" 2>/dev/null; then
+        cursor_set=1
+    fi
 fi
 
-echo "Dock: strip to Messages, System Settings, Chrome..."
+if (( cursor_set )); then
+    killall cfprefsd 2>/dev/null || true
+    ok "cursor colors (schema: $( (( MAJOR >= 15 )) && echo 'Sequoia+' || echo 'Monterey–Sonoma' ))"
+elif (( ! DRY )) && ls "$HOME/Library/Application Support/com.apple.TCC" >/dev/null 2>&1; then
+    skip "cursor colors — plutil could not write $UA"
+fi
+
+# ------------------------------------------------------------------- dock
+
+step "Dock: strip to Messages, System Settings, Chrome"
 if ! command -v dockutil >/dev/null 2>&1; then
-    echo "macos-defaults: dockutil missing — run 'brew bundle --file=~/.dotfiles/Brewfile'" >&2
-    exit 1
+    skip "Dock — dockutil missing. Run: brew bundle --file=$HOME/.dotfiles/Brewfile"
+elif (( DRY )); then
+    echo "  would: rewrite the Dock via dockutil"
+else
+    dock_ok=1
+    dockutil --no-restart --remove all >/dev/null || dock_ok=0
+    for app in '/System/Applications/Messages.app' \
+               '/System/Applications/System Settings.app' \
+               '/Applications/Google Chrome.app'; do
+        if [[ -d "$app" ]]; then
+            dockutil --no-restart --add "$app" >/dev/null || dock_ok=0
+        else
+            skip "Dock item $(basename "$app" .app) — not installed"
+        fi
+    done
+    # Right side (persistent-others), left-to-right: Applications, then
+    # Downloads as a stack with the Fan / "accordion" reveal. Trash is
+    # system-managed and stays at the far right.
+    dockutil --no-restart --add '/Applications'   --view grid --display stack >/dev/null || dock_ok=0
+    dockutil --no-restart --add "$HOME/Downloads" --view fan  --display stack >/dev/null || dock_ok=0
+    killall Dock 2>/dev/null || true
+    (( dock_ok )) && ok "Dock" || skip "Dock — one or more dockutil calls failed"
 fi
-dockutil --no-restart --remove all >/dev/null
-dockutil --no-restart --add '/System/Applications/Messages.app'        >/dev/null
-dockutil --no-restart --add '/System/Applications/System Settings.app' >/dev/null
-dockutil --no-restart --add '/Applications/Google Chrome.app'          >/dev/null
-# Right side (persistent-others), left-to-right: Applications, then
-# Downloads as a stack with the Fan / "accordion" reveal. Trash is
-# system-managed and stays at the far right.
-dockutil --no-restart --add '/Applications'   --view grid --display stack >/dev/null
-dockutil --no-restart --add "$HOME/Downloads" --view fan  --display stack >/dev/null
-killall Dock
 
-echo "Finder: show path bar + status bar, add \$HOME to sidebar favorites..."
-defaults write com.apple.finder ShowPathbar   -bool true
-defaults write com.apple.finder ShowStatusBar -bool true
+# ----------------------------------------------------------------- finder
+
+step "Finder: path bar, status bar, \$HOME in the sidebar"
+run defaults write com.apple.finder ShowPathbar   -bool true
+run defaults write com.apple.finder ShowStatusBar -bool true
 # Sidebar favorites are bookmark blobs in com.apple.sidebarlists.
 # /usr/bin/sfltool is the native (undocumented but stable since 10.11)
 # manipulator for LSSharedFileList. Dedups by URL on re-add.
-if [[ -x /usr/bin/sfltool ]]; then
+if (( DRY )); then
+    echo "  would: sfltool add-item \$HOME to Finder favorites"
+elif [[ -x /usr/bin/sfltool ]]; then
     /usr/bin/sfltool add-item com.apple.LSSharedFileList.FavoriteItems \
-        "file://${HOME}/" >/dev/null 2>&1 || \
-        echo "  sfltool add-item failed; add Home manually via Finder → Settings → Sidebar" >&2
+        "file://${HOME}/" >/dev/null 2>&1 \
+        || skip "Finder sidebar — add Home by hand via Finder → Settings → Sidebar"
 else
-    echo "  /usr/bin/sfltool missing — skipping sidebar add" >&2
+    skip "Finder sidebar — /usr/bin/sfltool missing on macOS $VERSION"
 fi
-killall Finder
+run killall Finder 2>/dev/null || true
+ok "Finder"
+
+# ------------------------------------------------------------------ iterm
+
+step "iTerm2: appearance"
+# iTerm2 holds its whole prefs dict in memory and rewrites the plist on quit,
+# so a `defaults write` against a running iTerm2 is discarded silently.
+# To pin a new setting: dump `defaults read com.googlecode.iterm2` before and
+# after flipping it in Settings, and diff for the key.
+if [[ ! -d /Applications/iTerm.app ]]; then
+    skip "iTerm2 appearance — iTerm2 not installed. Run: brew bundle --file=$HOME/.dotfiles/Brewfile"
+elif pgrep -x iTerm2 >/dev/null 2>&1; then
+    skip "iTerm2 appearance — quit iTerm2 and re-run macos-defaults"
+else
+    run defaults write com.googlecode.iterm2 TabStyleWithAutomaticOption -int 5  # 5 = Minimal
+    run killall cfprefsd 2>/dev/null || true
+    ok "iTerm2 appearance"
+fi
+
+step "iTerm2: import color presets"
+if [[ ! -d /Applications/iTerm.app ]]; then
+    skip "iTerm2 presets — iTerm2 not installed. Run: brew bundle --file=$HOME/.dotfiles/Brewfile"
+elif (( DRY )); then
+    echo "  would: import $HOME/.dotfiles/iterms/*.itermcolors"
+else
+    # iterm-themes' exit status decides ok-vs-skip, so it must not be read
+    # through a pipe: log it, then indent the log.
+    log="${TMPDIR:-/tmp}/iterm-themes.$$"
+    "$(dirname "$0")/iterm-themes" >"$log" 2>&1; rc=$?
+    sed 's/^/  /' "$log"
+    rm -f "$log"
+    if (( rc == 0 )); then
+        ok "iTerm2 color presets"
+    else
+        skip "iTerm2 presets — quit iTerm2 and run: iterm-themes"
+    fi
+fi
+
+# ---------------------------------------------------------------- summary
 
 echo
-echo "Done. Tap-to-click, tap-drag, and cursor SIZE need a logout to take"
-echo "effect — those settings are read once at session start. Cursor"
-echo "COLORS apply live (CFPrefs notification), and natural scrolling"
-echo "flips immediately."
-if (( ! cursor_set )); then
-    echo "(Cursor colors/size were skipped — see the Full Disk Access note above.)"
-fi
-
-if [[ ! -t 0 ]]; then
+if (( DRY )); then
+    echo "Dry run — nothing was changed."
     exit 0
 fi
+
+if (( ${#SKIPPED[@]} )); then
+    printf '%s%d step(s) skipped:%s\n' "$yellow" "${#SKIPPED[@]}" "$reset"
+    i=1
+    for s in "${SKIPPED[@]}"; do
+        printf '  %d. %s\n' "$i" "$s"
+        i=$(( i + 1 ))
+    done
+    echo
+fi
+
+echo "Tap-to-click, tap-drag and cursor SIZE are read once at session start,"
+echo "so they need a logout. Cursor COLORS and natural scrolling apply live."
+
+(( LOGOUT )) || exit 0
+[[ -t 0 ]] || exit 0
 
 echo
 printf 'Press ENTER to log out now, or ESC to skip: '

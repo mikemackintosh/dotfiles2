@@ -6,23 +6,43 @@ shell where possible.
 
 ## Install
 
+One command, from a Mac with nothing on it but macOS:
+
 ```sh
 git clone <repo-url> ~/.dotfiles
-~/.dotfiles/install.sh                   # symlinks + installs brew + brew bundle
+~/.dotfiles/install.sh                   # everything, in dependency order
 
 # Identity (never committed)
 cp ~/.dotfiles/gitconfig.private.example ~/.private/gitconfig
 $EDITOR ~/.private/gitconfig             # fill in name/email/signing key
-
-# Optional: apply macOS system prefs (scrolling, cursor color, Dock)
-macos-defaults
 ```
 
-Verify everything afterwards:
+`install.sh` runs, in this order: preflight (Command Line Tools, Xcode
+license, Full Disk Access) → Homebrew + Brewfile → symlinks → login shell →
+macOS system prefs. **Don't run it with sudo** — it asks for a password once,
+up front, only for the two steps that genuinely need root. Under `sudo` your
+`$HOME` becomes `/var/root` and every `defaults write` would configure root's
+account instead of yours; the script refuses rather than doing that quietly.
+
+Nothing aborts the run. A step that can't complete (App Store not signed in,
+Full Disk Access not granted yet) is skipped and reprinted as a numbered TODO
+list at the end, with the exact command to finish it.
 
 ```sh
-~/.dotfiles/install.sh --check           # symlinks + brew deps audit
+~/.dotfiles/install.sh --check           # audit; no changes
+~/.dotfiles/install.sh --no-macos        # bootstrap without the system prefs
+~/.dotfiles/install.sh links             # symlinks only
+~/.dotfiles/install.sh brew              # Homebrew + Brewfile only
+~/.dotfiles/install.sh macos             # system prefs only
 ```
+
+### Full Disk Access
+
+One thing no script can grant itself. The cursor-color settings live in
+`com.apple.universalaccess`, which is TCC-protected: the **terminal app**
+needs Full Disk Access (`sudo` does not help — TCC is per-app, not per-user).
+`install.sh` probes for it, opens the right Settings pane if it's missing,
+and carries on. Add your terminal, quit and reopen it, then `macos-defaults`.
 
 ## Layout
 
@@ -214,14 +234,40 @@ One-shot script that configures the Mac the way I like it: disables natural
 scrolling, sets a bright green (`#95ef00`) cursor with an orange (`#ff7f00`)
 outline, rewrites the Dock to Messages / System Settings / Chrome plus an
 `/Applications` folder and a `~/Downloads` stack (fan reveal) on the right
-side, and tweaks Finder (path bar, status bar, `$HOME` in the sidebar).
-Idempotent. Cursor color needs a logout to render.
+side, tweaks Finder (path bar, status bar, `$HOME` in the sidebar),
+imports the iTerm2 color presets, and sets the iTerm2 appearance theme to
+Minimal. Idempotent; run by `install.sh` by default.
 
 ```sh
-macos-defaults
+macos-defaults                # apply, then offer to log out
+macos-defaults --dry-run      # print what would change, touch nothing
+macos-defaults --no-logout    # apply only (how install.sh calls it)
 ```
 
-Requires `dockutil` (in the Brewfile).
+Supports macOS 12 (Monterey) through 26 (Tahoe). Anything that moved between
+releases is branched on the major version explicitly — Sequoia changed the
+cursor-color plist from RGBA arrays (`cursorFillColor`) to nested dicts
+(`cursorFill` + a `cursorIsCustomized` gate), so both schemas are handled. On
+a newer-than-tested macOS it reports what it skipped rather than writing keys
+the OS no longer reads.
+
+No step can take down the others: missing `dockutil`, no Full Disk Access, or
+an app that isn't installed is skipped and listed in the summary. Refuses to
+run under `sudo` (see the Install section for why). Tap-to-click, tap-drag and
+cursor *size* need a logout; cursor *colors* and scrolling apply live.
+
+### `iterm-themes` — install the color presets
+
+Imports `iterms/*.itermcolors` into iTerm2 as Custom Color Presets, so they
+appear under Settings → Profiles → Colors → Color Presets without dragging
+each file onto the app. Called by `macos-defaults`. iTerm2 must be **quit** —
+it holds its whole prefs dict in memory and writes it out on exit, which would
+clobber the import.
+
+```sh
+iterm-themes                  # import all
+iterm-themes --list           # show what's installed
+```
 
 ### `codex-security` — Codex Security scans that survive the shim
 

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# iterm-themes — import this repo's iterms/*.itermcolors into iTerm2 as
+# Custom Color Presets, so they show up under Settings → Profiles →
+# Colors → Color Presets without dragging each file onto the app.
+#
+# Idempotent: re-importing replaces the preset of the same name.
+#
+# Usage:
+#   iterm-themes            import every theme in ~/.dotfiles/iterms
+#   iterm-themes --list     show what is currently installed
+
+set -euo pipefail
+
+DOTFILES="$(cd "$(dirname "$0")/.." && pwd)"
+THEMES="$DOTFILES/iterms"
+PREFS="$HOME/Library/Preferences/com.googlecode.iterm2.plist"
+PB=/usr/libexec/PlistBuddy
+
+if [[ "${1:-}" == "--list" ]]; then
+    listing="${TMPDIR:-/tmp}/iterm-presets.$$"
+    "$PB" -c "Print :'Custom Color Presets'" "$PREFS" >"$listing" 2>/dev/null || true
+    grep -E '^ {4}[^ ].*= Dict' "$listing" | sed 's/ *= Dict.*//;s/^ */  /' || echo "  (none)"
+    rm -f "$listing"
+    exit 0
+fi
+
+if [[ ! -d "$THEMES" ]]; then
+    echo "iterm-themes: no themes at $THEMES" >&2
+    exit 1
+fi
+
+if [[ ! -d /Applications/iTerm.app ]]; then
+    echo "iterm-themes: iTerm2 not installed — run 'brew bundle --file=$DOTFILES/Brewfile'" >&2
+    exit 1
+fi
+
+# iTerm2 holds its whole prefs dict in memory and writes it out on quit,
+# which would clobber anything we add underneath it.
+if pgrep -x iTerm2 >/dev/null 2>&1; then
+    echo "iterm-themes: iTerm2 is running — quit it first, or the import is lost on quit." >&2
+    exit 1
+fi
+
+[[ -f "$PREFS" ]] || "$PB" -c "Save" "$PREFS" >/dev/null 2>&1
+"$PB" -c "Add :'Custom Color Presets' dict" "$PREFS" >/dev/null 2>&1 || true
+
+count=0
+for f in "$THEMES"/*.itermcolors; do
+    [[ -e "$f" ]] || continue
+    name="$(basename "$f" .itermcolors)"
+    # Replace rather than merge: Merge into an existing dict leaves stale
+    # keys from the old preset behind.
+    "$PB" -c "Delete :'Custom Color Presets':'$name'" "$PREFS" >/dev/null 2>&1 || true
+    "$PB" -c "Add :'Custom Color Presets':'$name' dict" "$PREFS" >/dev/null 2>&1 || true
+    if "$PB" -c "Merge '$f' :'Custom Color Presets':'$name'" "$PREFS" >/dev/null 2>&1; then
+        echo "  imported $name"
+        count=$(( count + 1 ))
+    else
+        echo "  FAILED   $name" >&2
+    fi
+done
+
+# cfprefsd caches the file we just edited behind iTerm's back.
+killall cfprefsd 2>/dev/null || true
+
+echo "iterm-themes: $count preset(s) installed. Pick one in"
+echo "  iTerm2 → Settings → Profiles → Colors → Color Presets."
