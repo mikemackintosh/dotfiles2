@@ -64,6 +64,7 @@ githooks/                                 → global hooks (core.hooksPath)
   pre-commit                                gofmt + go vet on staged .go files
   pre-push                                  gitleaks on push
 gitconfig.private.example                 → template for ~/.private/gitconfig
+ssh-config.example                        → template for ~/.ssh/config
 install.sh                                → idempotent symlink installer;
                                             `--check` audits state
 iterms/                                   → iTerm2 color themes
@@ -94,6 +95,15 @@ expected on machines that haven't run `brew bundle`.
 - `gitleaks` runs on `git push`. False positives in vendored trees
   are allowlisted in `.gitleaks.toml`; for a one-off, add a
   `# gitleaks:allow` inline comment, never `--no-verify` silently.
+- Commits are SSH-signed with a key from 1Password. If `~/.private/`
+  is missing, git has no identity at all and every commit fails;
+  `install.sh` now reports that instead of leaving you to guess.
+- A read-only **deploy key** in the 1Password agent can shadow your
+  account key: ssh offers keys in agent order and stops at the first
+  GitHub accepts, so pushes fail with "marked as read only" even
+  though auth succeeded. `ssh -T git@github.com` answering
+  `Hi owner/repo!` instead of `Hi username!` is the tell; pin the
+  account key per `ssh-config.example`.
 - `core.hooksPath = ~/.dotfiles/githooks` is global. If a repo
   needs its own hooks (rare), opt out with:
   `git config --local core.hooksPath .git/hooks`.

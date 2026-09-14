@@ -1,0 +1,25 @@
+# Template for ~/.ssh/config. Nothing here is secret, but the key file it
+# names is personal, so the real config stays out of this repo.
+#
+#   cp ~/.dotfiles/ssh-config.example ~/.ssh/config   # or merge by hand
+#   chmod 600 ~/.ssh/config
+#
+# Keys live in 1Password, not on disk; its agent serves them.
+Host *
+  IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+
+# Pin the ACCOUNT key for GitHub. Without this, ssh offers every key the
+# agent holds, in the agent's order, and stops at the first one GitHub
+# accepts. If that happens to be a repo deploy key — which are read-only
+# by default — authentication "succeeds" and every push then fails with:
+#
+#   ERROR: The key you are authenticating with has been marked as read only
+#
+# The tell is in `ssh -T git@github.com`: an account key answers
+# "Hi <username>!", a deploy key answers "Hi <owner>/<repo>!".
+#
+# IdentityFile points at a PUBLIC key here: ssh uses it to pick the
+# matching private key out of the agent, so no private key touches disk.
+Host github.com
+  IdentitiesOnly yes
+  IdentityFile ~/.ssh/github-account.pub

@@ -15,11 +15,15 @@ git clone <repo-url> ~/.dotfiles
 # Identity (never committed)
 cp ~/.dotfiles/gitconfig.private.example ~/.private/gitconfig
 $EDITOR ~/.private/gitconfig             # fill in name/email/signing key
+
+# SSH keys + signing (never committed)
+cp ~/.dotfiles/ssh-config.example ~/.ssh/config
+$EDITOR ~/.ssh/config                    # point IdentityFile at your key
 ```
 
 `install.sh` runs, in this order: preflight (Command Line Tools, Xcode
 license, Full Disk Access) → Homebrew + Brewfile → symlinks → login shell →
-macOS system prefs. **Don't run it with sudo** — it asks for a password once,
+macOS system prefs → git identity. **Don't run it with sudo** — it asks for a password once,
 up front, only for the two steps that genuinely need root. Under `sudo` your
 `$HOME` becomes `/var/root` and every `defaults write` would configure root's
 account instead of yours; the script refuses rather than doing that quietly.
@@ -35,6 +39,28 @@ list at the end, with the exact command to finish it.
 ~/.dotfiles/install.sh brew              # Homebrew + Brewfile only
 ~/.dotfiles/install.sh macos             # system prefs only
 ```
+
+
+### Git identity and signing
+
+Identity and the signing key live in `~/.private/gitconfig`, outside this
+repo — `.gitconfig` pulls them in with `[include]`. When that file is absent
+git has no `user.email` at all and the first commit fails on "empty ident
+name" with nothing pointing at the cause, so `install.sh` checks for it and
+prints the fix.
+
+Commits are SSH-signed with a key held in 1Password (no private key on disk).
+`install.sh` derives `~/.config/git/allowed_signers` from `user.email` and
+`user.signingkey`; without it `git log --show-signature` reports
+`Unable to open allowed keys file` and shows good signatures as untrusted.
+
+Two things GitHub needs, and they are separate entries even for one key:
+the key registered as an **Authentication key** to push, and as a **Signing
+key** for commits to show as Verified.
+
+If a push fails with `ERROR: The key you are authenticating with has been
+marked as read only`, a repo deploy key is shadowing your account key — see
+the comments in `ssh-config.example`.
 
 ### Full Disk Access
 
@@ -55,6 +81,7 @@ docker/                                     Dockerfiles built by our tools (clau
 docs/                                       Deep-dive docs for individual tools
 githooks/                                   global git hooks (core.hooksPath)
 gitconfig.private.example                   template for ~/.private/gitconfig
+ssh-config.example                          template for ~/.ssh/config (1Password agent)
 install.sh                                  idempotent symlink installer
 iterms/                                     iTerm2 color themes
 tmux/tmux.conf                              tmux config

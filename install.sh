@@ -286,6 +286,61 @@ do_links() {
     fi
 }
 
+# --------------------------------------------------------- git identity
+
+# user.name, user.email and the signing key live in ~/.private/gitconfig,
+# deliberately outside this repo. .gitconfig [include]s that path
+# unconditionally, so when the file is absent git has no identity at all
+# and the first commit dies on "empty ident name" with nothing pointing
+# at the cause. Check for it, and derive allowed_signers from it.
+do_gitidentity() {
+    step "Git identity"
+
+    local priv="$HOME/.private/gitconfig"
+    if [[ ! -f "$priv" ]]; then
+        todo "No $priv — copy gitconfig.private.example there and fill it in, or git has no identity and every commit fails."
+        return 0
+    fi
+    ok "$priv"
+
+    local email key fmt
+    email="$(git config --get user.email || true)"
+    key="$(git config --get user.signingkey || true)"
+    fmt="$(git config --get gpg.format || true)"
+
+    if [[ -n "$email" ]]; then ok "user.email $email"
+    else todo "user.email is unset — add it to $priv"; fi
+
+    if [[ "$fmt" != "ssh" || -z "$key" || -z "$email" ]]; then
+        info "not SSH-signing (gpg.format=${fmt:-unset}) — skipping allowed_signers"
+        return 0
+    fi
+
+    # user.signingkey is either literal key material or a path to a .pub.
+    local material="$key"
+    if [[ "$key" != ssh-* ]]; then
+        local path="${key/#\~/$HOME}"
+        if [[ -r "$path" ]]; then material="$(head -1 "$path")"; else
+            todo "user.signingkey is neither key material nor a readable file: $key"
+            return 0
+        fi
+    fi
+
+    # .gitconfig points [gpg "ssh"] allowedSignersFile here unconditionally,
+    # so a missing file makes every `git log --show-signature` fail with
+    # "Unable to open allowed keys file" even when the signature is good.
+    local signers="$HOME/.config/git/allowed_signers"
+    local line; line="$(echo "$material" | cut -d' ' -f1,2)"
+    line="$email $line"
+    mkdir -p "$(dirname "$signers")"
+    if [[ -f "$signers" ]] && grep -qxF "$line" "$signers"; then
+        ok "allowed_signers"
+    else
+        printf '%s\n' "$line" >>"$signers"
+        ok "allowed_signers <- user.email + user.signingkey"
+    fi
+}
+
 # --------------------------------------------------------- login shell
 
 do_shell() {
@@ -399,6 +454,36 @@ check() {
         failed=1
     fi
 
+    step "Git identity"
+    local priv="$HOME/.private/gitconfig"
+    local signers="$HOME/.config/git/allowed_signers"
+    if [[ -f "$priv" ]]; then ok "$priv"
+    else warn "$priv missing — copy gitconfig.private.example there"; failed=1; fi
+    local d_email d_key
+    d_email="$(git config --get user.email || true)"
+    d_key="$(git config --get user.signingkey || true)"
+    [[ -n "$d_email" ]] && ok "user.email $d_email" \
+        || { warn "user.email unset — git cannot commit"; failed=1; }
+    if [[ -z "$d_key" ]]; then
+        info "no user.signingkey — commits will be unsigned"
+    else
+        # Compare on the base64 field alone: the key may be stored as
+        # literal material or as a path to a .pub, and comments differ.
+        local d_mat=""
+        if [[ "$d_key" == ssh-* ]]; then
+            d_mat="$(echo "$d_key" | cut -d' ' -f2)"
+        elif [[ -r "${d_key/#\~/$HOME}" ]]; then
+            d_mat="$(head -1 "${d_key/#\~/$HOME}" | cut -d' ' -f2)"
+        fi
+        if [[ -n "$d_mat" ]] && [[ -f "$signers" ]] && grep -qF "$d_mat" "$signers"; then
+            ok "allowed_signers"
+        elif [[ -f "$signers" ]]; then
+            warn "$signers does not list user.signingkey"; failed=1
+        else
+            warn "$signers missing — good signatures show as untrusted. Run: install.sh"; failed=1
+        fi
+    fi
+
     step "Apps"
     local app
     for app in "iTerm" "Google Chrome" "1Password" "Alfred 5"; do
@@ -468,6 +553,7 @@ main() {
     preflight
     do_brew          # first: everything below wants git, dockutil, zsh
     do_links
+    do_gitidentity
     do_shell
     (( run_macos )) && do_macos
     summary
