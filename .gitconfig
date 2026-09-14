@@ -96,7 +96,11 @@
   insteadOf = ghub:
   insteadOf = github:
   insteadOf = http://github.com/
-  insteadOf = https://github.com/
+  # NOT https://github.com/ — a global https->ssh rewrite breaks every
+  # tool that clones a public GitHub URL on a machine with no key yet.
+  # It is what made the Homebrew installer die with "Permission denied
+  # (publickey)" on a fresh Mac. If you want it, put it in
+  # ~/.private/gitconfig where it only applies once you have a key.
 
 [url "https://github.com/homebrew/"]
   insteadOf = homebrew:
