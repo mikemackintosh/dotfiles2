@@ -42,6 +42,8 @@ bin/                                      → user scripts (on $PATH)
   gen-compose-override                      randomizes docker-compose ports per PR/branch
   notify                                    osascript notification wrapper
   macos-defaults                            apply scrolling / cursor / Dock prefs
+                                            (version-gated, macOS 12-26)
+  iterm-themes                              import iterms/*.itermcolors into iTerm2
   docker-shim                               multi-call Docker shim; tool names
                                             (node/npm/pnpm/python3/ruby/…) symlink to it
 claude/                                   → Claude Code config
@@ -96,8 +98,13 @@ expected on machines that haven't run `brew bundle`.
   needs its own hooks (rare), opt out with:
   `git config --local core.hooksPath .git/hooks`.
 - `~/.dotfiles/bin` is on `$PATH` (set in `.zshrc`). Any new script
-  there is auto-callable from anywhere; `install.sh` chmod's the
-  ones it knows about.
+  there is auto-callable from anywhere; `install.sh` chmod's every
+  real file in `bin/` by glob (skipping the docker-shim symlinks),
+  so a new tool needs no edit to the installer.
+- `install.sh` is `set -euo pipefail`. A pipeline whose first stage
+  legitimately exits non-zero (`brew bundle check`, `dscl`) will
+  kill the whole run — redirect to a file and read that, or append
+  `|| true` to the assignment.
 - `claude/bash-guard.sh` is a `PreToolUse` hook on Bash. It **denies**
   `git stash`, `… || cp/mv` fallback backups, and a pipe feeding `&&`
   into a state change; it **asks** on `reset --hard`, bare
@@ -110,7 +117,12 @@ expected on machines that haven't run `brew bundle`.
 When adding a new bin/script:
 1. Put it at `bin/<name>` with `#!/usr/bin/env bash` or `zsh`.
 2. Header comment: one-line summary, usage block, brief example.
-3. Add `chmod +x` for it to the list in `install.sh`.
+3. `install.sh` chmod's it automatically (glob over `bin/`) — no
+   installer edit needed.
 4. Mention it in `README.md` under "Tools in `bin/`".
 5. If it has a Claude prompt template, drop it under
    `claude/prompts/` and read it from the script.
+6. If it touches macOS system state, gate on `sw_vers -productVersion`
+   rather than assuming the current release, refuse to run as root
+   (sudo makes `$HOME=/var/root`), and skip-and-report instead of
+   `exit 1` so one missing tool can't abort the rest.

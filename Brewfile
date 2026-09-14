@@ -29,10 +29,26 @@ brew "mas"
 # GUI apps installed as Homebrew Casks — skipped if a copy is already
 # present in /Applications (e.g. installed by hand from a direct DMG)
 # to avoid clobbering the existing install.
+cask "iterm2"        unless File.exist?("/Applications/iTerm.app")
 cask "google-chrome" unless File.exist?("/Applications/Google Chrome.app")
 cask "1password"     unless File.exist?("/Applications/1Password.app")
+# Cask artifact is version-numbered, so the guard names Alfred 5.app.
+cask "alfred"        unless File.exist?("/Applications/Alfred 5.app")
+
+# Nerd Fonts — patched with the powerline/devicon glyphs zsh/prompt.zsh draws.
+# Without one of these the prompt renders as tofu boxes. Picked for the
+# Menlo/Monaco/Ubuntu lineage: Meslo is Menlo with a fixed line gap, Hack and
+# DejaVu share Menlo's Bitstream Vera ancestry, Anonymice descends from Monaco.
+# Full catalogue: brew search '/nerd-font$/'
+cask "font-hack-nerd-font"
+cask "font-meslo-lg-nerd-font"
+cask "font-dejavu-sans-mono-nerd-font"
+cask "font-anonymice-nerd-font"
+cask "font-ubuntu-mono-nerd-font"
+cask "font-ubuntu-sans-nerd-font"
 
 # Xcode comes from the Mac App Store (no Cask available — Apple-only).
-# ~12GB download; after install run `sudo xcodebuild -license accept`
-# and `sudo xcode-select --install` for the CLT.
+# ~12GB; install.sh accepts the license for you afterwards. This line
+# fails if the App Store is not signed in — install.sh reports that as a
+# TODO rather than aborting the whole bundle.
 mas "Xcode", id: 497799835
