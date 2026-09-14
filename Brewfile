@@ -16,6 +16,7 @@ brew "jq"                        # parses Claude statusline JSON in claude/statu
 brew "tmux"                      # tmux/tmux.conf
 brew "gitleaks"                  # scanned by githooks/pre-push
 brew "dockutil"                  # used by bin/macos-defaults to rewrite the Dock
+brew "go"                        # githooks/pre-commit runs gofmt + go vet on staged .go
 
 # zsh enhancements — .zshrc sources these from /opt/homebrew/share
 brew "zsh-autosuggestions"
