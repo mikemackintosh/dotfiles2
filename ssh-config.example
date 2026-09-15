@@ -7,6 +7,15 @@
 # Keys live in 1Password, not on disk; its agent serves them.
 Host *
   IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+  # Keepalives. A long-lived session behind NAT gets reaped when it goes
+  # quiet, and the drop is not graceful: whatever put the terminal into
+  # mouse-reporting mode (tmux with `mouse on`) never sends the reset, so
+  # the LOCAL terminal keeps encoding pointer movement as keystrokes —
+  # `35;90;24M` typed into your prompt. zsh/mouse-guard.zsh clears that
+  # afterwards; these two make it happen less. 60s x 3 = a dead link is
+  # noticed in three minutes instead of whenever TCP gets around to it.
+  ServerAliveInterval 60
+  ServerAliveCountMax 3
 
 # Pin the ACCOUNT key for GitHub. Without this, ssh offers every key the
 # agent holds, in the agent's order, and stops at the first one GitHub
@@ -23,3 +32,28 @@ Host *
 Host github.com
   IdentitiesOnly yes
   IdentityFile ~/.ssh/github-account.pub
+
+
+# --- Debugging a key that will not authenticate ------------------------
+#
+# `Permission denied (publickey,...)` never says WHICH problem you have,
+# because the client genuinely cannot tell the difference between:
+#
+#   1. the key is not in the server's ~/.ssh/authorized_keys
+#   2. it IS there, and sshd refuses to read it over file permissions
+#
+# `ssh -vvv` distinguishes agent problems from server problems but not
+# these two from each other. Offering a key and getting back
+# "Authentications that can continue" means the server rejected it —
+# the agent did its job.
+#
+# Case 1: compare fingerprints. Locally `ssh-add -l`, remotely
+#   `ssh-keygen -lf ~/.ssh/authorized_keys`. No match, no auth.
+#   Fix: ssh-copy-id -i ~/.ssh/<key>.pub user@host
+#
+# Case 2: sshd ignores authorized_keys if anything in the path is
+#   writable by group or other. It says so only in ITS log
+#   (`journalctl -u sshd` / /var/log/auth.log):
+#     Authentication refused: bad ownership or modes for directory /home/u
+#   Fix, on the remote: chmod go-w ~ && chmod 700 ~/.ssh &&
+#                       chmod 600 ~/.ssh/authorized_keys
