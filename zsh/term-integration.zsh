@@ -63,3 +63,29 @@ _zt_sync_end()   { (( _ZT_SYNC )) && print -n -- $'\e[?2026l' }
 add-zsh-hook preexec _zt_preexec
 add-zsh-hook chpwd   _zt_osc7
 _zt_osc7        # report the directory this shell started in
+
+# iTerm2 speaks OSC 133, but gates several menu items — Command History,
+# Recent Directories, Select Output of Last Command — on having seen its own
+# OSC 1337 announcement first. Without it the marks are drawn and the menu
+# entries stay greyed out, which looks like the marks aren't working.
+# This is what iTerm's own iterm2_shell_integration.zsh sends; we send the
+# same handshake without installing that script (it would double-mark).
+if [[ $TERM_PROGRAM == iTerm.app ]]; then
+    export ITERM_SHELL_INTEGRATION_INSTALLED=Yes
+
+    _zt_iterm_announce() {
+        print -n -- $'\e]1337;ShellIntegrationVersion=5;shell=zsh\a'
+    }
+
+    # iTerm's own dialect for host and directory. RemoteHost is what lets it
+    # tell a local path from one on the far side of an ssh session, so
+    # "open in new split here" does the right thing after you disconnect.
+    _zt_iterm_host_dir() {
+        print -n -- $'\e]1337;RemoteHost='"${USER}@${HOST}"$'\a'
+        print -n -- $'\e]1337;CurrentDir='"${PWD}"$'\a'
+    }
+
+    add-zsh-hook precmd _zt_iterm_host_dir
+    _zt_iterm_announce
+    _zt_iterm_host_dir
+fi
