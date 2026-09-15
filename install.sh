@@ -484,6 +484,52 @@ check() {
         fi
     fi
 
+    step "Container runtime"
+    # Half of bin/ is containerized: claude-in-docker, git-review, git-feature,
+    # codex-security, chrome-devtools-mcp, kube.zsh and every docker-shim alias
+    # (node, npm, python3, ruby, …). Without a runtime they all exit 127, so a
+    # doctor that ignores docker reports "all good" on a machine where they
+    # cannot run.
+    if ! command -v docker >/dev/null 2>&1; then
+        warn "docker missing — every docker-shim alias (node, python3, ruby, …) and claude-in-docker, git-review, git-feature, codex-security will exit 127. Run: brew bundle --file=$BREWFILE"
+        failed=1
+    else
+        local dlog="${TMPDIR:-/tmp}/dotfiles-docker.$$"
+        if docker info >"$dlog" 2>&1; then
+            ok "docker reachable"
+        else
+            warn "docker installed but not responding — start Docker Desktop"
+            failed=1
+        fi
+        rm -f "$dlog"
+    fi
+
+    step "Terminal font and theme"
+    # grep -q SIGPIPEs system_profiler, and pipefail would read that as
+    # "font missing". Log it, then grep the log.
+    local flog="${TMPDIR:-/tmp}/dotfiles-fonts.$$"
+    system_profiler SPFontsDataType >"$flog" 2>/dev/null || true
+    if grep -q "MesloLGL Nerd Font Mono" "$flog"; then
+        ok "MesloLGL Nerd Font Mono"
+    else
+        warn "Nerd Font missing — the prompt renders as tofu. Run: brew bundle --file=$BREWFILE"
+        failed=1
+    fi
+    rm -f "$flog"
+    local theme
+    theme="$(defaults read com.googlecode.iterm2 TabStyleWithAutomaticOption 2>/dev/null || true)"
+    [[ "$theme" == "5" ]] && ok "iTerm2 theme Minimal" \
+        || warn "iTerm2 theme is not Minimal — run: macos-defaults"
+
+    step "SSH"
+    # A read-only deploy key in the agent can shadow the account key and make
+    # every push fail "marked as read only" while auth still succeeds.
+    if grep -qs "IdentitiesOnly" "$HOME/.ssh/config"; then
+        ok "github.com key pinned in ~/.ssh/config"
+    else
+        warn "no IdentitiesOnly pin in ~/.ssh/config — a deploy key can shadow your account key. See ssh-config.example"
+    fi
+
     step "Apps"
     local app
     for app in "iTerm" "Google Chrome" "1Password" "Alfred 5"; do
