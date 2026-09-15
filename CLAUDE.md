@@ -73,6 +73,7 @@ vim/                                      → vimrc + vendored plugins
 zsh/                                      → plugin files sourced by .zshrc
   prompt.zsh, prompt-themes.zsh             prompt engine + themes/shapes
   kube.zsh                                  `k` — kubectl in Docker (+ `kconfig`)
+  term-integration.zsh                      OSC 133 marks, OSC 7 cwd, DEC 2026
   mouse-guard.zsh                           clears stuck mouse reporting after
                                             a dropped ssh/tmux session
 ```

@@ -194,8 +194,14 @@ _zp_hud_callback() {
     zle -F $fd          # unregister this handler
     exec {fd}<&-        # close the pipe
     _ZP_HUD_FD=
+    # Bracket the repaint in DEC 2026 so the terminal presents it as one
+    # frame. This is the one place the prompt redraws itself out of band —
+    # a 400-byte rewrite triggered by a background job finishing — which is
+    # exactly the case that tears without it.
+    (( $+functions[_zt_sync_begin] )) && _zt_sync_begin
     _zp_render          # rebuild PROMPT with the fresh HUD values…
     zle reset-prompt    # …and repaint (precmd is NOT re-run by reset-prompt)
+    (( $+functions[_zt_sync_end] )) && _zt_sync_end
 }
 
 _zp_refresh_hud() {
@@ -327,13 +333,16 @@ _zp_render() {
     [[ $_ZP_DENSITY != zen ]] && _zp_seg $_ZP_TIME_BG $_ZP_TIME_FG " ${_ZP_CLOCK} %* "
 
     local p
-    p=$(_zp_assemble)
+    # OSC 133 A marks the prompt start; it must lead the whole string.
+    p="${_ZT_A-}$(_zp_assemble)"
     p+=$'\n'
     if (( _ZP_STATUS == 0 )); then
         p+="%F{$_ZP_OK}%B❯%b%f "
     else
         p+="%F{$_ZP_ERR}%B[${_ZP_STATUS}] ❯%b%f "
     fi
+    # OSC 133 B: everything after this point is what the user typed.
+    p+="${_ZT_B-}"
     typeset -g _ZP_FULL_PROMPT=$p
     PROMPT=$_ZP_FULL_PROMPT
     RPROMPT=
@@ -343,6 +352,10 @@ _zp_render() {
 # still be stale here; the async callback repaints once they land.
 _zp_build_prompt() {
     _ZP_STATUS=$?
+    # OSC 133 D must carry the real exit code, so it is emitted here rather
+    # than from a precmd hook of its own — zsh hands only the FIRST precmd
+    # hook the true $?, and later ones see the previous hook's status.
+    (( $+functions[_zt_mark_d] )) && _zt_mark_d $_ZP_STATUS
     vcs_info
     print ""
 

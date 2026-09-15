@@ -136,3 +136,6 @@
 # verification list is safe to commit. Must sit after [include] to win.
 [gpg "ssh"]
   allowedSignersFile = ~/.config/git/allowed_signers
+[user]
+	email = mike@dangerclose.co
+	name = Mike Mackintosh
