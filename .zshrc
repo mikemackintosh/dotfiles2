@@ -84,6 +84,11 @@ export PATH="${(j.:.)extra_sources}:$STD_PATH"
 # `compdef` (used by go.zsh to register `_goto`) doesn't exist until compinit
 # defines it, so any plugin calling compdef before this point silently no-ops.
 # Skip the slow security check unless the dump is older than 24h.
+# Docker Desktop appends its fpath line to the BOTTOM of this file, which is
+# after compinit has already run — the completions never load. It belongs
+# here instead, and $HOME rather than the installer's /Users/<you>.
+[[ -d "$HOME/.docker/completions" ]] && fpath=("$HOME/.docker/completions" $fpath)
+
 autoload -Uz compinit
 if [[ -n ~/.zcompdump(#qN.mh+24) ]]; then
     compinit
