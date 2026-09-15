@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# git-ssh-sign — pick whichever SSH signer exists on this machine.
+#
+# Usage: set as gpg.ssh.program (absolute path — git does not
+#        tilde-expand that key reliably):
+#
+#   [gpg "ssh"]
+#     program = /Users/you/.dotfiles/bin/git-ssh-sign
+#
+# git invokes it as: git-ssh-sign -Y sign -n git -f <pubkeyfile>
+# op-ssh-sign is argv-compatible with ssh-keygen by design — that
+# compatibility is what makes the gpg.ssh.program swap work at all —
+# so either binary can serve the same invocation untouched.
+#
+# Why: hardcoding op-ssh-sign makes every commit fail anywhere
+# /Applications is absent (containers, cloud sandboxes, Linux), even
+# when a forwarded agent holds the signing key. On the Mac this still
+# routes to 1Password, so you keep the approval prompt.
+
+set -euo pipefail
+
+op=/Applications/1Password.app/Contents/MacOS/op-ssh-sign
+[[ -x $op ]] && exec "$op" "$@"
+
+exec ssh-keygen "$@"
