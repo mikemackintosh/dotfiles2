@@ -95,6 +95,12 @@ expected on machines that haven't run `brew bundle`.
 - `gitleaks` runs on `git push`. False positives in vendored trees
   are allowlisted in `.gitleaks.toml`; for a one-off, add a
   `# gitleaks:allow` inline comment, never `--no-verify` silently.
+- Docker is a hard dependency of half of `bin/`. Every docker-shim
+  alias (`node`, `npm`, `python3`, `ruby`, …) plus `claude-in-docker`,
+  `git-review`, `git-feature`, `codex-security` and the
+  `chrome-devtools` MCP exit 127 without it. The Brewfile installs
+  Docker Desktop and `install.sh --check` fails when it is absent —
+  it used to report "all good" on a machine where none of them ran.
 - Commits are SSH-signed with a key from 1Password. If `~/.private/`
   is missing, git has no identity at all and every commit fails;
   `install.sh` now reports that instead of leaving you to guess.

@@ -262,8 +262,9 @@ scrolling, sets a bright green (`#95ef00`) cursor with an orange (`#ff7f00`)
 outline, rewrites the Dock to Messages / System Settings / Chrome plus an
 `/Applications` folder and a `~/Downloads` stack (fan reveal) on the right
 side, tweaks Finder (path bar, status bar, `$HOME` in the sidebar),
-imports the iTerm2 color presets, and sets the iTerm2 appearance theme to
-Minimal. Idempotent; run by `install.sh` by default.
+imports the iTerm2 color presets, sets the iTerm2 appearance theme to
+Minimal and every profile's font to MesloLGL Nerd Font Mono. Idempotent;
+run by `install.sh` by default.
 
 ```sh
 macos-defaults                # apply, then offer to log out

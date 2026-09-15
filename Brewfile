@@ -35,6 +35,7 @@ cask "google-chrome" unless File.exist?("/Applications/Google Chrome.app")
 cask "1password"     unless File.exist?("/Applications/1Password.app")
 # Cask artifact is version-numbered, so the guard names Alfred 5.app.
 cask "alfred"        unless File.exist?("/Applications/Alfred 5.app")
+cask "docker-desktop" unless File.exist?("/Applications/Docker.app")
 
 # Nerd Fonts — patched with the powerline/devicon glyphs zsh/prompt.zsh draws.
 # Without one of these the prompt renders as tofu boxes. Picked for the
