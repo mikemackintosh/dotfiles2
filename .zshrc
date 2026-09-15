@@ -110,6 +110,7 @@ dot_plugins=(
     "kube"
     "private"
     "zupershell"
+    "term-integration"
     "prompt"
     "mouse-guard"
     "fzf-widgets"

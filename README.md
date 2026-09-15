@@ -455,6 +455,46 @@ name, the old format, still loads). The "memory count" segment shows
 project-scoped memory files for the current directory (cached by mtime, free
 per-prompt).
 
+
+### Terminal integration (OSC 133 / OSC 7 / DEC 2026)
+
+`zsh/term-integration.zsh`. All non-printing; a terminal that doesn't
+implement a sequence ignores it.
+
+| Sequence | What it buys |
+|---|---|
+| `OSC 133 A/B` | marks prompt start and end-of-prompt, emitted inside `$PROMPT` |
+| `OSC 133 C` | marks where command output begins (preexec) |
+| `OSC 133 D;code` | marks command end with its exit status |
+| `OSC 7` | reports cwd, so a new tab or split opens here instead of `~` |
+| `DEC 2026` | brackets the async HUD repaint into one atomic frame |
+
+In iTerm2 the 133 marks enable ⌘↑/⌘↓ prompt navigation, "Select Output of
+Last Command", and per-command status marks in the scrollbar. Nothing about
+them is visible — they are structure, not decoration.
+
+Three traps, all of which cost real debugging:
+
+- **`A` and `B` live inside `$PROMPT` and must be wrapped in `%{ %}`.** zsh
+  counts every byte of the prompt toward the cursor column; an unwrapped
+  escape miscounts and corrupts line editing the moment a command wraps.
+- **`D` is emitted from the prompt's own precmd, not a hook of its own.** zsh
+  hands only the *first* precmd hook the real `$?`; every later hook sees the
+  status of the hook before it, so a second hook would report 0 forever.
+- **`zsh/zupershell.zsh` gates its own 133/7 emitter on
+  `TERM_PROGRAM=zupershell`**, which means it is inert in iTerm2 — that file
+  buys nothing in a normal terminal. This one bails when zupershell is
+  active so the two never double-mark.
+
+DEC 2026 is emitted blind rather than probed with `DECRQM` (`ESC[?2026$p`):
+an unsupported private mode is ignored, and querying would put up to 100ms
+of latency into every shell start to learn something that costs 8 bytes to
+assume. `ZT_SYNC=0` opts out.
+
+Inside tmux, arbitrary OSC needs the passthrough envelope. tmux consumes
+OSC 7 itself for `pane_current_path` and handles 133 natively in recent
+versions, so these three work, but anything new should be checked there.
+
 ### Mouse reporting after a dropped ssh session
 
 `zsh/mouse-guard.zsh`. tmux with `mouse on` asks the *terminal* for mouse

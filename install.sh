@@ -490,12 +490,22 @@ check() {
     # (node, npm, python3, ruby, …). Without a runtime they all exit 127, so a
     # doctor that ignores docker reports "all good" on a machine where they
     # cannot run.
-    if ! command -v docker >/dev/null 2>&1; then
+    # Docker Desktop installs its CLI only into ~/.docker/bin, which .zprofile
+    # adds to PATH for LOGIN shells. The doctor may be run from a non-login
+    # shell (a script, an agent, `sh -c`), so look there explicitly rather
+    # than reporting a working Docker as missing.
+    local docker_bin=""
+    if command -v docker >/dev/null 2>&1; then
+        docker_bin=docker
+    elif [[ -x "$HOME/.docker/bin/docker" ]]; then
+        docker_bin="$HOME/.docker/bin/docker"
+    fi
+    if [[ -z $docker_bin ]]; then
         warn "docker missing — every docker-shim alias (node, python3, ruby, …) and claude-in-docker, git-review, git-feature, codex-security will exit 127. Run: brew bundle --file=$BREWFILE"
         failed=1
     else
         local dlog="${TMPDIR:-/tmp}/dotfiles-docker.$$"
-        if docker info >"$dlog" 2>&1; then
+        if "$docker_bin" info >"$dlog" 2>&1; then
             ok "docker reachable"
         else
             warn "docker installed but not responding — start Docker Desktop"
