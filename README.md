@@ -401,7 +401,7 @@ segments are filled at all; density decides how many appear.
 
 ```sh
 prompt-gallery             # every theme as a sample line — pick by eye
-prompt-theme               # cycle; -l lists all 15
+prompt-theme               # cycle; -l lists them all
 prompt-theme kanagawa      # set explicitly
 prompt-shape slant         # chevron round slant flame dust block plain ascii
 prompt-style outline       # filled | bubble | outline
@@ -425,6 +425,16 @@ prompt-density lean        # full | lean | zen
 | `paper` | light pills for a bright room | round + bubble |
 | `matrix` | one green hue, no fills | plain + outline |
 | `ascii` | no Nerd Font glyphs at all | ascii + outline + lean |
+| `dracula` | the default nerd palette | chevron |
+| `crt` | amber P3 phosphor, one hue | plain + outline |
+| `tron` | light-cycle cyan, Clu orange | block |
+| `blade` | smog, neon and blood orange | slant |
+| `neuromancer` | ice blue and chrome, one magenta cut | dust |
+| `vaporwave` | pastel neon, floating | round + bubble |
+| `nuclear` | hazard yellow, radioactive green | flame |
+| `commodore` | C64 boot-screen blues | block |
+| `borland` | Turbo Pascal yellow on #0000AA | block |
+| `wopr` | WarGames green with amber alerts | block |
 
 `ascii` is the one to pick over ssh to a box with an unpatched font, or in a
 tty: it swaps the separators *and* the segment icons for plain characters, so

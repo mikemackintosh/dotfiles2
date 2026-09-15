@@ -1,5 +1,5 @@
 # Pure-zsh powerline prompt. Four independent knobs, each persisted:
-#   prompt-theme    palette      (15; -l lists, no arg cycles)
+#   prompt-theme    palette      (-l lists, no arg cycles)
 #   prompt-shape    separators   chevron round slant flame dust block plain ascii
 #   prompt-style    fill         filled | bubble | outline
 #   prompt-density  how much     full | lean | zen

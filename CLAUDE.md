@@ -71,7 +71,7 @@ iterms/                                   → iTerm2 color themes
 tmux/tmux.conf                            → tmux config
 vim/                                      → vimrc + vendored plugins
 zsh/                                      → plugin files sourced by .zshrc
-  prompt.zsh, prompt-themes.zsh             prompt engine + 15 themes/shapes
+  prompt.zsh, prompt-themes.zsh             prompt engine + themes/shapes
   kube.zsh                                  `k` — kubectl in Docker (+ `kconfig`)
 ```
 
