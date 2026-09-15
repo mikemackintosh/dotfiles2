@@ -454,6 +454,31 @@ State persists to `~/.zp-theme` as `theme shape style density` (a bare theme
 name, the old format, still loads). The "memory count" segment shows
 project-scoped memory files for the current directory (cached by mtime, free
 per-prompt).
+
+### Mouse reporting after a dropped ssh session
+
+`zsh/mouse-guard.zsh`. tmux with `mouse on` asks the *terminal* for mouse
+events by writing `\e[?1003h` / `\e[?1006h`. Over ssh those bytes change the
+state of the terminal on **this** machine — the remote tmux only borrowed it.
+A clean detach writes the matching resets; a dropped connection never does,
+and the terminal keeps encoding pointer movement as keystrokes. ZLE eats the
+`\e[<` prefix and types the rest, which is where `35;90;24M` on your command
+line comes from (`35` = motion, `90` = column, `24` = row).
+
+The hook remembers whether the last command was one that hands a remote or
+containerized program control of the terminal — `ssh mosh et autossh tmux
+docker kubectl claude-attach`, looking past `sudo`/`command`/`env` — and if
+so writes the 36 bytes that clear every mouse mode when you get back to the
+prompt.
+
+```sh
+fixterm                    # manual escape hatch, for leaks the hook can't see
+```
+
+It also fires if you `Ctrl-Z` an ssh session; a later `fg` comes back without
+mouse reporting until the remote app redraws. Matching is on whole words, so
+`sshuttle` and `git commit -m "ssh stuff"` don't trigger it.
+
 ## Git hooks
 
 Global `core.hooksPath = ~/.dotfiles/githooks`. Currently provides:

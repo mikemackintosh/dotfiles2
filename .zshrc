@@ -106,6 +106,7 @@ dot_plugins=(
     "private"
     "zupershell"
     "prompt"
+    "mouse-guard"
     "fzf-widgets"
 )
 
