@@ -352,9 +352,10 @@ _zp_render() {
 # still be stale here; the async callback repaints once they land.
 _zp_build_prompt() {
     _ZP_STATUS=$?
-    # OSC 133 D must carry the real exit code, so it is emitted here rather
-    # than from a precmd hook of its own — zsh hands only the FIRST precmd
-    # hook the true $?, and later ones see the previous hook's status.
+    # OSC 133 D carries the exit code. Emitted here, next to the line that
+    # captures it, so the value and its use stay together. (zsh 5.9 hands
+    # every precmd hook the real $? — a previous hook's return status does
+    # not leak into the next — so hook order is not what makes this work.)
     (( $+functions[_zt_mark_d] )) && _zt_mark_d $_ZP_STATUS
     vcs_info
     print ""

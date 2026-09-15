@@ -31,9 +31,9 @@ typeset -g _ZT_B=$'%{\e]133;B\a%}'
 _zt_preexec() { print -n -- $'\e]133;C\a' }
 
 # D = the previous command ended, with its status. Called from the prompt's
-# own precmd rather than registered as a hook of its own: zsh gives the first
-# precmd hook the real $?, and every later one sees the status of the hook
-# before it. Emitting D from a second hook would report 0 for everything.
+# own precmd rather than registered separately, so the capture of $? and its
+# use sit on adjacent lines. Verified on zsh 5.9.2: every precmd hook does
+# receive the real $?, so this is tidiness, not a correctness requirement.
 _zt_mark_d() { print -n -- $'\e]133;D;'"${1:-0}"$'\a' }
 
 # Percent-encode everything outside the unreserved set. file:// URLs with a

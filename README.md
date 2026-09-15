@@ -469,18 +469,33 @@ implement a sequence ignores it.
 | `OSC 7` | reports cwd, so a new tab or split opens here instead of `~` |
 | `DEC 2026` | brackets the async HUD repaint into one atomic frame |
 
-In iTerm2 the 133 marks enable ⌘↑/⌘↓ prompt navigation, "Select Output of
-Last Command", and per-command status marks in the scrollbar. Nothing about
-them is visible — they are structure, not decoration.
+In iTerm2 the marks feed prompt navigation, "Select Output of Last Command",
+per-command status marks, and the command/directory history. Nothing about
+them is visible — they are structure, not decoration. Defaults per iTerm2's
+shell-integration documentation; the menu wins if these ever drift:
+
+| Feature | Menu | Shortcut |
+|---|---|---|
+| Command History popup | Session → Open Command History… | `⇧⌘;` |
+| Autocomplete | Session → Open Autocomplete… | `⌘;` |
+| Recent Directories | Session → Open Recent Directories… | `⌥⌘/` |
+| Next / Previous mark | Edit → Marks and Annotations | `⇧⌘↓` / `⇧⌘↑` |
+| Select Output of Last Command | Edit menu | — |
+| History panes | Toolbelt → Command History / Recent Directories | — |
+
+Both popups fill from commands run *after* integration is active, so a tab
+opened before the shell sent the handshake stays empty whatever you press.
 
 Three traps, all of which cost real debugging:
 
 - **`A` and `B` live inside `$PROMPT` and must be wrapped in `%{ %}`.** zsh
   counts every byte of the prompt toward the cursor column; an unwrapped
   escape miscounts and corrupts line editing the moment a command wraps.
-- **`D` is emitted from the prompt's own precmd, not a hook of its own.** zsh
-  hands only the *first* precmd hook the real `$?`; every later hook sees the
-  status of the hook before it, so a second hook would report 0 forever.
+- **`D` is emitted from the prompt's own precmd**, on the line after `$?`
+  is captured. Not for the reason first documented here: zsh 5.9.2 hands
+  *every* precmd hook the real `$?` — verified with two hooks where the
+  first returns 7 and the second still sees the command's own 1. Keeping
+  the capture and the emission adjacent is tidiness, not correctness.
 - **`zsh/zupershell.zsh` gates its own 133/7 emitter on
   `TERM_PROGRAM=zupershell`**, which means it is inert in iTerm2 — that file
   buys nothing in a normal terminal. This one bails when zupershell is
