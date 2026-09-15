@@ -395,16 +395,55 @@ Override per-machine in `zsh/private.zsh`, or per-repo with a direnv `.envrc`:
 
 ## Prompt
 
-Pure-zsh powerline prompt, three palettes. Toggle with `prompt-theme`:
+Pure-zsh powerline prompt with four independent, persisted knobs. A theme
+picks colors; shape picks the glyphs between segments; style decides whether
+segments are filled at all; density decides how many appear.
 
 ```sh
-prompt-theme               # cycle: zush → tokyo → noir
-prompt-theme tokyo         # set explicitly
+prompt-gallery             # every theme as a sample line — pick by eye
+prompt-theme               # cycle; -l lists all 15
+prompt-theme kanagawa      # set explicitly
+prompt-shape slant         # chevron round slant flame dust block plain ascii
+prompt-style outline       # filled | bubble | outline
+prompt-density lean        # full | lean | zen
 ```
 
-Persists to `~/.zp-theme`. The "memory count" segment shows project-scoped
-memory files for the current directory (cached by mtime, free per-prompt).
+| Theme | Look | Ships with |
+|---|---|---|
+| `zush` | warm coral/peach (default) | chevron |
+| `tokyo` | Tokyo Night Storm, cool | chevron |
+| `noir` | deep indigo + cyan + crimson | chevron |
+| `princess` | sunset gradient, white text | chevron |
+| `jblab` | JetBrains navy + teal | chevron |
+| `rose` | Rosé Pine, muted plum and gold | round |
+| `catppuccin` | Mocha pastels | chevron |
+| `nord` | arctic blues | block |
+| `gruvbox` | retro earth tones | flame |
+| `synthwave` | neon pink/cyan on violet | slant |
+| `kanagawa` | woodblock blue, autumn, sakura | slant |
+| `ember` | forge yellow → crimson → charcoal | flame |
+| `paper` | light pills for a bright room | round + bubble |
+| `matrix` | one green hue, no fills | plain + outline |
+| `ascii` | no Nerd Font glyphs at all | ascii + outline + lean |
 
+`ascii` is the one to pick over ssh to a box with an unpatched font, or in a
+tty: it swaps the separators *and* the segment icons for plain characters, so
+nothing renders as tofu. Every other shape needs a Nerd Font — see the
+Brewfile.
+
+Densities: `full` is everything including the weather/battery/now-playing HUD;
+`lean` drops the HUD and keeps git, duration and clock; `zen` is user, dir and
+branch only.
+
+Adding a theme takes one function. Any `_zp_palette_<name>` in
+`zsh/prompt-themes.zsh` is discovered by name — no list to update. It may set
+`_ZP_THEME_SHAPE`, `_ZP_THEME_STYLE` and `_ZP_THEME_DENSITY` to ship its own
+defaults, which the knobs then override.
+
+State persists to `~/.zp-theme` as `theme shape style density` (a bare theme
+name, the old format, still loads). The "memory count" segment shows
+project-scoped memory files for the current directory (cached by mtime, free
+per-prompt).
 ## Git hooks
 
 Global `core.hooksPath = ~/.dotfiles/githooks`. Currently provides:

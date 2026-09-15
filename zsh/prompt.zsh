@@ -1,5 +1,11 @@
-# Pure-zsh powerline prompt with toggleable palettes.
-# Toggle: `prompt-theme [zush|tokyo|noir]`; no arg cycles. Persists to ~/.zp-theme.
+# Pure-zsh powerline prompt. Four independent knobs, each persisted:
+#   prompt-theme    palette      (15; -l lists, no arg cycles)
+#   prompt-shape    separators   chevron round slant flame dust block plain ascii
+#   prompt-style    fill         filled | bubble | outline
+#   prompt-density  how much     full | lean | zen
+#   prompt-gallery  every theme rendered as a sample line
+# A theme may ship its own shape/style/density defaults; the knobs override.
+# State lives in ~/.zp-theme as "theme shape style density".
 
 [[ -o interactive ]] || return 0
 
@@ -78,51 +84,77 @@ _zp_palette_jblab() {
 typeset -g _ZP_MUTED='#6c7086'
 
 # --- Theme loader / toggler ---
-prompt-theme() {
-    local target=${1:-}
-    if [[ -z $target ]]; then
-        case $_ZP_THEME in
-            zush)     target=tokyo    ;;
-            tokyo)    target=noir     ;;
-            noir)     target=princess ;;
-            princess) target=jblab    ;;
-            *)        target=zush     ;;
-        esac
-    fi
-    case $target in
-        zush)     _zp_palette_zush;     _ZP_THEME=zush     ;;
-        tokyo)    _zp_palette_tokyo;    _ZP_THEME=tokyo    ;;
-        noir)     _zp_palette_noir;     _ZP_THEME=noir     ;;
-        princess) _zp_palette_princess; _ZP_THEME=princess ;;
-        jblab)    _zp_palette_jblab;    _ZP_THEME=jblab    ;;
-        *) echo "Usage: prompt-theme [zush|tokyo|noir|princess|jblab]"; return 1 ;;
-    esac
-    print -- $_ZP_THEME > ~/.zp-theme
-    [[ -n $1 ]] || echo "Prompt theme: $_ZP_THEME"
+# Themes are discovered, not enumerated: any function named _zp_palette_<name>
+# — here or in prompt-themes.zsh — is a theme, so adding one needs no edit to
+# this block. State persists as "theme shape style density" in ~/.zp-theme;
+# a bare theme name is the old one-field format and still loads.
+source "${${(%):-%x}:A:h}/prompt-themes.zsh"
+
+typeset -g _ZP_THEME=zush _ZP_SHAPE=chevron _ZP_STYLE=filled _ZP_DENSITY=full
+
+_zp_themes() { print -l -- ${(ok)functions[(I)_zp_palette_*]#_zp_palette_} }
+
+_zp_load_theme() {
+    local name=$1
+    (( $+functions[_zp_palette_$name] )) || return 1
+    # A palette may ship its own shape/style/density. Clear them first, or
+    # the previous theme's choices leak into one that declares none.
+    _ZP_THEME_SHAPE= _ZP_THEME_STYLE= _ZP_THEME_DENSITY=
+    _zp_palette_$name
+    _ZP_THEME=$name
+    _zp_apply_shape ${_ZP_THEME_SHAPE:-chevron}
+    _ZP_STYLE=${_ZP_THEME_STYLE:-filled}
+    _ZP_DENSITY=${_ZP_THEME_DENSITY:-full}
 }
 
-# Load saved theme on init
-if [[ -r ~/.zp-theme ]]; then
-    _ZP_THEME=$(<~/.zp-theme)
-else
-    _ZP_THEME=zush
-fi
-case $_ZP_THEME in
-    tokyo)    _zp_palette_tokyo    ;;
-    noir)     _zp_palette_noir     ;;
-    princess) _zp_palette_princess ;;
-    jblab)    _zp_palette_jblab    ;;
-    *)        _zp_palette_zush; _ZP_THEME=zush ;;
-esac
+_zp_save() { print -r -- "$_ZP_THEME $_ZP_SHAPE $_ZP_STYLE $_ZP_DENSITY" > ~/.zp-theme }
+
+prompt-theme() {
+    local -a all; all=( ${(f)"$(_zp_themes)"} )
+    local target=${1:-}
+    case $target in
+        -l|--list) print "themes: ${all[*]}   (current: $_ZP_THEME)"; return 0 ;;
+        "") local i=${all[(i)$_ZP_THEME]}
+            (( i >= ${#all} )) && i=0
+            target=${all[i+1]} ;;
+    esac
+    if ! _zp_load_theme $target; then
+        print "Usage: prompt-theme [${(j:|:)all}]  (or -l)" >&2
+        return 1
+    fi
+    _zp_save
+    (( $+functions[_zp_render] )) && _zp_render
+    [[ -n $1 ]] || print "Prompt theme: $_ZP_THEME"
+}
+
+# Deferred to after the glyph definitions below: _zp_apply_shape swaps the
+# segment icons for ASCII ones, so the icons must exist before it first runs.
+_zp_init_theme() {
+    local -a saved
+    if [[ -r ~/.zp-theme ]]; then
+        saved=( ${=$(<~/.zp-theme)} )
+        _zp_load_theme ${saved[1]:-zush} || _zp_load_theme zush
+        [[ -n ${saved[2]:-} ]] && _zp_apply_shape ${saved[2]}
+        [[ -n ${saved[3]:-} ]] && _ZP_STYLE=${saved[3]}
+        [[ -n ${saved[4]:-} ]] && _ZP_DENSITY=${saved[4]}
+    else
+        _zp_load_theme zush
+    fi
+    return 0
+}
 
 # --- Glyphs ---
-typeset -g _ZP_CAP=$''  # left half-circle
-typeset -g _ZP_SEP=$''  # right chevron
 typeset -g _ZP_GIT=$''  # git branch
 typeset -g _ZP_CLOCK=$''  # fa-clock-o
 typeset -g _ZP_BRAIN=$''  # fa-bookmark
 typeset -g _ZP_TIMER=$''  # fa-hourglass-half — last cmd duration
-typeset -g _ZP_END=$''  # right half-circle (M365-style trailing cap)
+
+# Caps and separators now come from the shape (prompt-themes.zsh); these are
+# the per-segment icons. Stashed so the ascii shape can swap them out and
+# every other shape can put them back.
+typeset -g _ZP_ICON_GIT=$_ZP_GIT _ZP_ICON_CLOCK=$_ZP_CLOCK
+typeset -g _ZP_ICON_BRAIN=$_ZP_BRAIN _ZP_ICON_TIMER=$_ZP_TIMER
+_zp_init_theme
 
 # Command-duration timing: preexec captures start, precmd computes elapsed.
 # Only surfaced as a segment when the previous command took >=1s.
@@ -209,72 +241,93 @@ _zp_memory_count() {
     print $_ZP_MEM_COUNT
 }
 
+typeset -g _ZP_STATUS=0 _ZP_BRANCH="" _ZP_MEM=0
+typeset -ga _ZP_SEG_BG _ZP_SEG_FG _ZP_SEG_TXT
+
+_zp_seg() { _ZP_SEG_BG+=($1); _ZP_SEG_FG+=($2); _ZP_SEG_TXT+=($3) }
+
+# Turn the collected segments into a prompt string according to the style:
+#   filled   powerline — background fills, the separator carries the color
+#            change from one segment to the next
+#   bubble   each segment capped both sides and floating on the terminal
+#            background, separated by a space
+#   outline  no fills at all; the segment color becomes the text color and a
+#            muted thin glyph divides them
+_zp_assemble() {
+    local out="" prev="" bg fg txt i
+    for (( i = 1; i <= ${#_ZP_SEG_BG}; i++ )); do
+        bg=$_ZP_SEG_BG[i]; fg=$_ZP_SEG_FG[i]; txt=$_ZP_SEG_TXT[i]
+        case $_ZP_STYLE in
+            outline)
+                [[ -n $prev ]] && out+="%F{$_ZP_MUTED}${_ZP_THIN}%f"
+                out+="%F{$bg}%B${txt}%b%f"
+                ;;
+            bubble)
+                out+="%F{$bg}${_ZP_CAP}%f%K{$bg}%F{$fg}%B${txt}%b%f%k%F{$bg}${_ZP_END}%f "
+                ;;
+            *)
+                if [[ -z $prev ]]; then
+                    out+="%F{$bg}${_ZP_CAP}%f"
+                else
+                    out+="%K{$bg}%F{$prev}${_ZP_SEP}%f%k"
+                fi
+                out+="%K{$bg}%F{$fg}%B${txt}%b%f%k"
+                ;;
+        esac
+        prev=$bg
+    done
+    [[ $_ZP_STYLE == filled && -n $prev ]] && out+="%F{$prev}${_ZP_END}%f"
+    print -r -- "$out"
+}
+
+# One rendered line per theme, for prompt-gallery. Fixed sample data so the
+# rows line up regardless of cwd, branch or clock.
+_zp_sample_line() {
+    _ZP_SEG_BG=(); _ZP_SEG_FG=(); _ZP_SEG_TXT=()
+    _zp_seg $_ZP_USER_BG  $_ZP_USER_FG  " %n "
+    _zp_seg $_ZP_DIR_BG   $_ZP_DIR_FG   " ~/dotfiles "
+    _zp_seg $_ZP_GIT_BG   $_ZP_GIT_FG   " ${_ZP_GIT} main "
+    _zp_seg $_ZP_TIME_BG  $_ZP_TIME_FG  " ${_ZP_CLOCK} 16:36 "
+    _zp_assemble
+}
+
 # Assemble PROMPT from the per-command state captured in _zp_build_prompt
 # (status / branch / duration / mem count) plus the current HUD values.
 # Split out from the precmd hook so the async HUD callback can rebuild and
 # repaint without re-running precmd (which `zle reset-prompt` won't do).
-typeset -g _ZP_STATUS=0 _ZP_BRANCH="" _ZP_MEM=0
 _zp_render() {
-    local p=""
-    p+="%F{$_ZP_USER_BG}${_ZP_CAP}%f"
-    p+="%K{$_ZP_USER_BG}%F{$_ZP_USER_FG}%B %n %b%f%k"
-    p+="%K{$_ZP_DIR_BG}%F{$_ZP_USER_BG}${_ZP_SEP}%f%k"
-    p+="%K{$_ZP_DIR_BG}%F{$_ZP_DIR_FG}%B %(3c.…/%2~.%~) %b%f%k"
+    _ZP_SEG_BG=(); _ZP_SEG_FG=(); _ZP_SEG_TXT=()
 
-    local prev=$_ZP_DIR_BG
-    local branch=$_ZP_BRANCH
+    _zp_seg $_ZP_USER_BG $_ZP_USER_FG " %n "
+    _zp_seg $_ZP_DIR_BG  $_ZP_DIR_FG  " %(3c.…/%2~.%~) "
+    [[ -n $_ZP_BRANCH ]] && _zp_seg $_ZP_GIT_BG $_ZP_GIT_FG " ${_ZP_GIT} ${_ZP_BRANCH} "
 
-    if [[ -n $branch ]]; then
-        p+="%K{$_ZP_GIT_BG}%F{$prev}${_ZP_SEP}%f%k"
-        p+="%K{$_ZP_GIT_BG}%F{$_ZP_GIT_FG}%B ${_ZP_GIT} ${branch} %b%f%k"
-        prev=$_ZP_GIT_BG
-    fi
-
-    if (( _ZP_MEM > 0 )); then
-        p+="%K{$_ZP_BRAIN_BG}%F{$prev}${_ZP_SEP}%f%k"
-        p+="%K{$_ZP_BRAIN_BG}%F{$_ZP_BRAIN_FG}%B ${_ZP_BRAIN} ${_ZP_MEM} %b%f%k"
-        prev=$_ZP_BRAIN_BG
-    fi
-
-    if [[ -n $_ZP_CMD_DUR ]]; then
-        p+="%K{$_ZP_DUR_BG}%F{$prev}${_ZP_SEP}%f%k"
-        p+="%K{$_ZP_DUR_BG}%F{$_ZP_DUR_FG}%B ${_ZP_TIMER} ${_ZP_CMD_DUR} %b%f%k"
-        prev=$_ZP_DUR_BG
+    # zen keeps only who/where/which-branch. lean adds the working segments
+    # but no HUD. full is everything.
+    if [[ $_ZP_DENSITY != zen ]]; then
+        (( _ZP_MEM > 0 )) && _zp_seg $_ZP_BRAIN_BG $_ZP_BRAIN_FG " ${_ZP_BRAIN} ${_ZP_MEM} "
+        [[ -n $_ZP_CMD_DUR ]] && _zp_seg $_ZP_DUR_BG $_ZP_DUR_FG " ${_ZP_TIMER} ${_ZP_CMD_DUR} "
     fi
 
     # HUD segments: each renders only if its helper returned data. Values
     # are populated asynchronously (see _zp_refresh_hud). Theme-independent
     # colors mirror the tmux pills. Double '%' so the prompt expander
     # doesn't eat percent signs in helper output (e.g. "H:60%").
-    local music=${_ZP_HUD_MUSIC//\%/%%}
-    local airpods=${_ZP_HUD_AIRPODS//\%/%%}
-    local battery=${_ZP_HUD_BATTERY//\%/%%}
-    local weather=${_ZP_HUD_WEATHER//\%/%%}
-    if [[ -n $music ]]; then
-        p+="%K{#bb9af7}%F{$prev}${_ZP_SEP}%f%k"
-        p+="%K{#bb9af7}%F{#1a1b26}%B ${music} %b%f%k"
-        prev='#bb9af7'
-    fi
-    if [[ -n $airpods ]]; then
-        p+="%K{#ff9e64}%F{$prev}${_ZP_SEP}%f%k"
-        p+="%K{#ff9e64}%F{#1a1b26}%B 🎧 ${airpods} %b%f%k"
-        prev='#ff9e64'
-    fi
-    if [[ -n $battery ]]; then
-        p+="%K{#f7768e}%F{$prev}${_ZP_SEP}%f%k"
-        p+="%K{#f7768e}%F{#1a1b26}%B ${battery} %b%f%k"
-        prev='#f7768e'
-    fi
-    if [[ -n $weather ]]; then
-        p+="%K{#6bb8d9}%F{$prev}${_ZP_SEP}%f%k"
-        p+="%K{#6bb8d9}%F{#1a1b26}%B ☁ ${weather} %b%f%k"
-        prev='#6bb8d9'
+    if [[ $_ZP_DENSITY == full ]]; then
+        local music=${_ZP_HUD_MUSIC//\%/%%}
+        local airpods=${_ZP_HUD_AIRPODS//\%/%%}
+        local battery=${_ZP_HUD_BATTERY//\%/%%}
+        local weather=${_ZP_HUD_WEATHER//\%/%%}
+        [[ -n $music   ]] && _zp_seg '#bb9af7' '#1a1b26' " ${music} "
+        [[ -n $airpods ]] && _zp_seg '#ff9e64' '#1a1b26' " 🎧 ${airpods} "
+        [[ -n $battery ]] && _zp_seg '#f7768e' '#1a1b26' " ${battery} "
+        [[ -n $weather ]] && _zp_seg '#6bb8d9' '#1a1b26' " ☁ ${weather} "
     fi
 
-    p+="%K{$_ZP_TIME_BG}%F{$prev}${_ZP_SEP}%f%k"
-    p+="%K{$_ZP_TIME_BG}%F{$_ZP_TIME_FG}%B ${_ZP_CLOCK} %* %b%f%k"
-    p+="%F{$_ZP_TIME_BG}${_ZP_END}%f"
+    [[ $_ZP_DENSITY != zen ]] && _zp_seg $_ZP_TIME_BG $_ZP_TIME_FG " ${_ZP_CLOCK} %* "
 
+    local p
+    p=$(_zp_assemble)
     p+=$'\n'
     if (( _ZP_STATUS == 0 )); then
         p+="%F{$_ZP_OK}%B❯%b%f "
@@ -285,7 +338,6 @@ _zp_render() {
     PROMPT=$_ZP_FULL_PROMPT
     RPROMPT=
 }
-
 # precmd hook: capture the per-command state that's fixed for this prompt's
 # lifetime, kick off the async HUD refresh, then render. The HUD values may
 # still be stale here; the async callback repaints once they land.
