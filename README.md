@@ -98,6 +98,14 @@ For work commits under `~/go/src/github.com/wealthsimple/...`, an `includeIf`
 overlay auto-swaps `user.email` to the work address from
 `~/.private/gitconfig-work`. Other paths keep the personal email.
 
+Commits and tags are SSH-signed. `gpg.ssh.program` points at
+[`bin/git-ssh-sign`](bin/git-ssh-sign) rather than 1Password directly, so the
+same config signs on the Mac (via 1Password, with its approval prompt) and
+inside containers or cloud sandboxes (via `ssh-keygen` against the forwarded
+agent). The verification list — the one signing-related file safe to commit —
+is `~/.config/git/allowed_signers`; without it `git log --format=%G?` reports
+`U` and "No principal matched" even for good signatures.
+
 ## tmux (prefix `C-b`)
 
 | Binding              | Action                                              |
@@ -241,6 +249,14 @@ Both `git-review` and `git-feature` use:
   + docker CLI + `@anthropic-ai/claude-code`). Built lazily by
   `claude-in-docker` on first use, or ahead of time with
   `docker build -t claude-review:local ~/.dotfiles/docker/claude-review/`.
+
+### `git-ssh-sign` — pick whichever SSH signer exists
+
+Set as `gpg.ssh.program` in `~/.private/gitconfig` (absolute path — git does
+not tilde-expand that key reliably). Execs 1Password's `op-ssh-sign` when
+`/Applications` has it, else falls through to `ssh-keygen`, which signs against
+whatever agent is forwarded. Both binaries take the same argv, which is what
+makes the swap transparent.
 
 ### `claude-doctor` — verify the setup is healthy
 

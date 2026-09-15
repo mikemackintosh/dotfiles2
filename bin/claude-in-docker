@@ -295,6 +295,12 @@ stub="$HOME/.dotfiles/docker/claude-review/cc-status-stub"
 # there would silently no-op.
 [[ -d $HOME/.dotfiles/claude ]] && run+=(-v "$HOME/.dotfiles/claude:$HOME/.dotfiles/claude:ro")
 
+# gpg.ssh.program points at bin/git-ssh-sign (the signer picker). Without
+# this mount that script is absent in the container and every commit dies
+# with "cannot run ...: No such file or directory" before it ever reaches
+# the forwarded agent.
+[[ -d $HOME/.dotfiles/bin ]] && run+=(-v "$HOME/.dotfiles/bin:$HOME/.dotfiles/bin:ro")
+
 # Extra mounts for adjacent repos. Caller (bin/git-feature / git-review)
 # sets CLAUDE_REVIEW_EXTRA_MOUNTS to a colon-separated list of paths that
 # should be RW-mounted at their own paths — typically the workdir's

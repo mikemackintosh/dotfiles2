@@ -18,10 +18,13 @@
 [gpg]
   format = ssh
 
-# macOS + 1Password example. Adjust or delete if you sign differently
-# (e.g. use a GPG key, ssh-agent directly, or no signing at all).
+# Point at the wrapper, not at 1Password directly: hardcoding
+# op-ssh-sign breaks every commit anywhere /Applications is absent
+# (containers, cloud sandboxes, Linux). Absolute path required — git
+# does not tilde-expand this key reliably. Adjust or delete if you sign
+# differently (GPG key, ssh-agent directly, or no signing at all).
 [gpg "ssh"]
-  program = "/Applications/1Password.app/Contents/MacOS/op-ssh-sign"
+  program = /Users/YOUR_USER/.dotfiles/bin/git-ssh-sign
 
 [commit]
   gpgsign = true
