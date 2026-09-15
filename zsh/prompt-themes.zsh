@@ -132,6 +132,134 @@ _zp_palette_ascii() {
     _ZP_THEME_DENSITY=lean
 }
 
+
+# --- Hacker / cyberpunk / nerd shelf -----------------------------------
+
+# Dracula — the default nerd palette since 2013.
+_zp_palette_dracula() {
+    _ZP_USER_BG='#bd93f9';  _ZP_USER_FG='#282a36'
+    _ZP_DIR_BG='#8be9fd';   _ZP_DIR_FG='#282a36'
+    _ZP_GIT_BG='#50fa7b';   _ZP_GIT_FG='#282a36'
+    _ZP_BRAIN_BG='#ff79c6'; _ZP_BRAIN_FG='#282a36'
+    _ZP_DUR_BG='#f1fa8c';   _ZP_DUR_FG='#282a36'
+    _ZP_TIME_BG='#6272a4';  _ZP_TIME_FG='#f8f8f2'
+    _ZP_OK='#50fa7b'; _ZP_ERR='#ff5555'
+}
+
+# CRT — amber P3 phosphor, one hue at four intensities. The monochrome
+# terminal matrix isn't: that one is green.
+_zp_palette_crt() {
+    _ZP_USER_BG='#ffb000';  _ZP_USER_FG='#1a0f00'
+    _ZP_DIR_BG='#d99000';   _ZP_DIR_FG='#1a0f00'
+    _ZP_GIT_BG='#b37400';   _ZP_GIT_FG='#1a0f00'
+    _ZP_BRAIN_BG='#8c5a00'; _ZP_BRAIN_FG='#ffd899'
+    _ZP_DUR_BG='#663f00';   _ZP_DUR_FG='#ffb000'
+    _ZP_TIME_BG='#402800';  _ZP_TIME_FG='#ffb000'
+    _ZP_OK='#ffb000'; _ZP_ERR='#ff4500'
+    _ZP_THEME_STYLE=outline
+    _ZP_THEME_SHAPE=plain
+}
+
+# Tron — light cycle cyan and Clu orange on a near-black grid. Flat blocks,
+# no pointed separators: the grid has right angles.
+_zp_palette_tron() {
+    _ZP_USER_BG='#6fc3df';  _ZP_USER_FG='#04121c'
+    _ZP_DIR_BG='#0f5e79';   _ZP_DIR_FG='#cfefff'
+    _ZP_GIT_BG='#ffffff';   _ZP_GIT_FG='#04121c'
+    _ZP_BRAIN_BG='#ff7f11'; _ZP_BRAIN_FG='#04121c'
+    _ZP_DUR_BG='#1b7f9e';   _ZP_DUR_FG='#e6feff'
+    _ZP_TIME_BG='#04121c';  _ZP_TIME_FG='#6fc3df'
+    _ZP_OK='#6fc3df'; _ZP_ERR='#ff7f11'
+    _ZP_THEME_SHAPE=block
+}
+
+# Blade Runner — smog, neon signage and blood orange. Slanted like the
+# rain in every frame.
+_zp_palette_blade() {
+    _ZP_USER_BG='#ff4e00';  _ZP_USER_FG='#1a0d08'
+    _ZP_DIR_BG='#d9a066';   _ZP_DIR_FG='#1a0d08'
+    _ZP_GIT_BG='#00c2b2';   _ZP_GIT_FG='#04201e'
+    _ZP_BRAIN_BG='#ff7b8a'; _ZP_BRAIN_FG='#1a0d08'
+    _ZP_DUR_BG='#0b3c49';   _ZP_DUR_FG='#ffd9a0'
+    _ZP_TIME_BG='#1a0d08';  _ZP_TIME_FG='#ffb347'
+    _ZP_OK='#00c2b2'; _ZP_ERR='#ff4e00'
+    _ZP_THEME_SHAPE=slant
+}
+
+# Neuromancer — "the color of television, tuned to a dead channel."
+# Ice blue and chrome with one magenta cut.
+_zp_palette_neuromancer() {
+    _ZP_USER_BG='#a8e0ff';  _ZP_USER_FG='#05070a'
+    _ZP_DIR_BG='#8a8f98';   _ZP_DIR_FG='#05070a'
+    _ZP_GIT_BG='#ff2ea6';   _ZP_GIT_FG='#05070a'
+    _ZP_BRAIN_BG='#c0c8d0'; _ZP_BRAIN_FG='#05070a'
+    _ZP_DUR_BG='#2b3440';   _ZP_DUR_FG='#a8e0ff'
+    _ZP_TIME_BG='#05070a';  _ZP_TIME_FG='#a8e0ff'
+    _ZP_OK='#a8e0ff'; _ZP_ERR='#ff2ea6'
+    _ZP_THEME_SHAPE=dust
+}
+
+# Vaporwave — pastel neon, floating bubbles. Aesthetic.
+_zp_palette_vaporwave() {
+    _ZP_USER_BG='#ff71ce';  _ZP_USER_FG='#2b0a2e'
+    _ZP_DIR_BG='#01cdfe';   _ZP_DIR_FG='#05202b'
+    _ZP_GIT_BG='#05ffa1';   _ZP_GIT_FG='#032b1c'
+    _ZP_BRAIN_BG='#b967ff'; _ZP_BRAIN_FG='#1a0a2b'
+    _ZP_DUR_BG='#fffb96';   _ZP_DUR_FG='#2b2a05'
+    _ZP_TIME_BG='#7a04eb';  _ZP_TIME_FG='#ffffff'
+    _ZP_OK='#05ffa1'; _ZP_ERR='#ff71ce'
+    _ZP_THEME_SHAPE=round
+    _ZP_THEME_STYLE=bubble
+}
+
+# Nuclear — hazard placard yellow, radioactive green, flame separators.
+_zp_palette_nuclear() {
+    _ZP_USER_BG='#ffe800';  _ZP_USER_FG='#0d0d00'
+    _ZP_DIR_BG='#39ff14';   _ZP_DIR_FG='#0d1a00'
+    _ZP_GIT_BG='#ff6f00';   _ZP_GIT_FG='#1a0a00'
+    _ZP_BRAIN_BG='#c8ff00'; _ZP_BRAIN_FG='#0d1a00'
+    _ZP_DUR_BG='#1a1a00';   _ZP_DUR_FG='#ffe800'
+    _ZP_TIME_BG='#0d0d00';  _ZP_TIME_FG='#39ff14'
+    _ZP_OK='#39ff14'; _ZP_ERR='#ff2d00'
+    _ZP_THEME_SHAPE=flame
+}
+
+# Commodore 64 — the two blues off the boot screen, plus PETSCII pastels.
+_zp_palette_commodore() {
+    _ZP_USER_BG='#7869c4';  _ZP_USER_FG='#ffffff'
+    _ZP_DIR_BG='#40318d';   _ZP_DIR_FG='#7869c4'
+    _ZP_GIT_BG='#9ad284';   _ZP_GIT_FG='#40318d'
+    _ZP_BRAIN_BG='#c9d487'; _ZP_BRAIN_FG='#40318d'
+    _ZP_DUR_BG='#70a4b2';   _ZP_DUR_FG='#40318d'
+    _ZP_TIME_BG='#40318d';  _ZP_TIME_FG='#ffffff'
+    _ZP_OK='#9ad284'; _ZP_ERR='#b86962'
+    _ZP_THEME_SHAPE=block
+}
+
+# Borland — Turbo Pascal's blue IDE, yellow on #0000AA. DOS-blocky.
+_zp_palette_borland() {
+    _ZP_USER_BG='#ffff55';  _ZP_USER_FG='#0000aa'
+    _ZP_DIR_BG='#0000aa';   _ZP_DIR_FG='#ffff55'
+    _ZP_GIT_BG='#55ffff';   _ZP_GIT_FG='#0000aa'
+    _ZP_BRAIN_BG='#ff55ff'; _ZP_BRAIN_FG='#0000aa'
+    _ZP_DUR_BG='#aaaaaa';   _ZP_DUR_FG='#0000aa'
+    _ZP_TIME_BG='#0000aa';  _ZP_TIME_FG='#ffffff'
+    _ZP_OK='#55ff55'; _ZP_ERR='#ff5555'
+    _ZP_THEME_SHAPE=block
+}
+
+# WOPR — WarGames console green with amber alerts. Filled blocks, so it
+# reads as a different machine from matrix's unfilled green text.
+_zp_palette_wopr() {
+    _ZP_USER_BG='#33ff33';  _ZP_USER_FG='#001a00'
+    _ZP_DIR_BG='#00b300';   _ZP_DIR_FG='#001a00'
+    _ZP_GIT_BG='#ffb000';   _ZP_GIT_FG='#1a1000'
+    _ZP_BRAIN_BG='#008f00'; _ZP_BRAIN_FG='#d9ffd9'
+    _ZP_DUR_BG='#004d00';   _ZP_DUR_FG='#33ff33'
+    _ZP_TIME_BG='#001a00';  _ZP_TIME_FG='#33ff33'
+    _ZP_OK='#33ff33'; _ZP_ERR='#ff3333'
+    _ZP_THEME_SHAPE=block
+}
 # --- Shapes -----------------------------------------------------------
 # Shape = the glyphs between and around segments. Everything except
 # "block", "plain" and "ascii" needs a Nerd Font.
