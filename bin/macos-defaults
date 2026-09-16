@@ -169,6 +169,24 @@ ok "Finder"
 
 # ------------------------------------------------------------------ iterm
 
+# iTerm2 rewrites its whole plist on quit, so every `defaults write` below
+# must happen while it is NOT running. Two traps live in this three-line
+# check:
+#   pgrep is not usable — it enumerates hundreds of processes and reports
+#   nothing at all for the iTerm2 GUI app, so `pgrep -x iTerm2` fails open.
+#   `ps | grep -q` is not usable either — grep exits on the first match,
+#   ps takes SIGPIPE, and under `set -o pipefail` the pipeline reports ps's
+#   failure, so the guard reads "not running" while iTerm is on screen.
+# Snapshot to a file, then grep the file.
+iterm_running() {
+    local snap="${TMPDIR:-/tmp}/iterm-ps.$$" rc=1
+    ps -eo comm= >"$snap" 2>/dev/null || true
+    grep -q "iTerm.app/Contents/MacOS/iTerm2" "$snap" && rc=0
+    rm -f "$snap"
+    return $rc
+}
+
+
 step "iTerm2: appearance"
 # iTerm2 holds its whole prefs dict in memory and rewrites the plist on quit,
 # so a `defaults write` against a running iTerm2 is discarded silently.
@@ -176,10 +194,18 @@ step "iTerm2: appearance"
 # after flipping it in Settings, and diff for the key.
 if [[ ! -d /Applications/iTerm.app ]]; then
     skip "iTerm2 appearance — iTerm2 not installed. Run: brew bundle --file=$HOME/.dotfiles/Brewfile"
-elif pgrep -x iTerm2 >/dev/null 2>&1; then
+elif iterm_running; then
     skip "iTerm2 appearance — quit iTerm2 and re-run macos-defaults"
 else
     run defaults write com.googlecode.iterm2 TabStyleWithAutomaticOption -int 5  # 5 = Minimal
+    # Marks: off = the three per-status colors apply, so a failed command's
+    # mark is red instead of every mark being the one system accent blue.
+    run defaults write com.googlecode.iterm2 "Use Theme Mark Colors" -bool false
+    # Dimming: an unfocused window (or an inactive split) is otherwise washed
+    # out, which reads as a rendering bug the first time mark navigation
+    # leaves one line undimmed.
+    run defaults write com.googlecode.iterm2 DimBackgroundWindows -bool false
+    run defaults write com.googlecode.iterm2 DimInactiveSplitPanes -bool false
     run killall cfprefsd 2>/dev/null || true
     ok "iTerm2 appearance"
 fi
@@ -198,7 +224,7 @@ if [[ ! -d /Applications/iTerm.app ]]; then
     skip "iTerm2 font — iTerm2 not installed"
 elif ! grep -q "MesloLGL Nerd Font Mono" "$font_log"; then
     skip "iTerm2 font — MesloLGL Nerd Font Mono missing. Run: brew bundle --file=$HOME/.dotfiles/Brewfile"
-elif pgrep -x iTerm2 >/dev/null 2>&1; then
+elif iterm_running; then
     skip "iTerm2 font — quit iTerm2 and re-run macos-defaults"
 elif [[ ! -f "$ITERM_PLIST" ]]; then
     skip "iTerm2 font — no prefs at $ITERM_PLIST; launch iTerm2 once first"
