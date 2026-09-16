@@ -35,11 +35,18 @@ if [[ ! -d /Applications/iTerm.app ]]; then
 fi
 
 # iTerm2 holds its whole prefs dict in memory and writes it out on quit,
-# which would clobber anything we add underneath it.
-if pgrep -x iTerm2 >/dev/null 2>&1; then
+# which would clobber anything we add underneath it. Two traps: pgrep does
+# not see the iTerm2 GUI app at all, and `ps | grep -q` fails open under
+# `set -o pipefail` because grep's early exit SIGPIPEs ps and the pipeline
+# then reports ps's status. Snapshot, then grep the snapshot.
+_ps_snap="${TMPDIR:-/tmp}/iterm-themes-ps.$$"
+ps -eo comm= >"$_ps_snap" 2>/dev/null || true
+if grep -q "iTerm.app/Contents/MacOS/iTerm2" "$_ps_snap"; then
+    rm -f "$_ps_snap"
     echo "iterm-themes: iTerm2 is running — quit it first, or the import is lost on quit." >&2
     exit 1
 fi
+rm -f "$_ps_snap"
 
 [[ -f "$PREFS" ]] || "$PB" -c "Save" "$PREFS" >/dev/null 2>&1
 "$PB" -c "Add :'Custom Color Presets' dict" "$PREFS" >/dev/null 2>&1 || true
