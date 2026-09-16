@@ -44,6 +44,7 @@ bin/                                      → user scripts (on $PATH)
   macos-defaults                            apply scrolling / cursor / Dock prefs
                                             (version-gated, macOS 12-26)
   iterm-themes                              import iterms/*.itermcolors into iTerm2
+  term-marks                                portable OSC 133 marks for remote hosts
   docker-shim                               multi-call Docker shim; tool names
                                             (node/npm/pnpm/python3/ruby/…) symlink to it
 claude/                                   → Claude Code config

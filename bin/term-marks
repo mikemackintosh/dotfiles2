@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# term-marks — portable OSC 133 prompt marks for any shell, any terminal.
+#
+# The local zsh gets these from zsh/term-integration.zsh. A shell on the far
+# side of an ssh connection does not: marks are emitted by the SHELL, and
+# travel to your terminal as ordinary bytes in the stream. So a remote host
+# needs its own emitter. This prints one, or installs it.
+#
+# Nothing here is terminal-specific. OSC 133 is understood by iTerm2, kitty,
+# WezTerm, Ghostty, Windows Terminal and recent VTE; every other terminal
+# ignores the bytes. There is no detection and nothing to configure.
+#
+# Usage:
+#   term-marks                    print the snippet (paste into a remote rc)
+#   term-marks --install HOST     append it to HOST's ~/.bashrc and ~/.zshrc
+#   term-marks --check            report whether THIS shell emits marks
+#
+# Example:
+#   term-marks --install duppster@172.20.3.3
+#   ssh duppster@172.20.3.3       # marks now appear for remote prompts
+
+set -euo pipefail
+
+MARKER="# >>> osc133 prompt marks (term-marks) >>>"
+END_MARKER="# <<< osc133 prompt marks (term-marks) <<<"
+
+snippet() {
+    cat <<'SNIPPET'
+# >>> osc133 prompt marks (term-marks) >>>
+# Semantic prompt marks: A=prompt start, B=end of prompt, C=output start,
+# D=command end + exit code. Plus OSC 7 to report the cwd. Terminals that
+# do not implement them ignore the bytes, so this is safe everywhere.
+if [ -z "${_OSC133_ON:-}" ]; then
+  _OSC133_ON=1
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    autoload -Uz add-zsh-hook
+    _osc133_preexec() { printf '\033]133;C\007'; }
+    _osc133_precmd() {
+      printf '\033]133;D;%s\007' "$?"
+      printf '\033]7;file://%s%s\007' "${HOST:-$(hostname)}" "$PWD"
+    }
+    add-zsh-hook preexec _osc133_preexec
+    add-zsh-hook precmd  _osc133_precmd
+    # %{ %} marks the span as zero-width; without it zsh miscounts the
+    # cursor column and line editing corrupts once a command wraps.
+    PS1=$'%{\033]133;A\007%}'"$PS1"$'%{\033]133;B\007%}'
+  elif [ -n "${BASH_VERSION:-}" ]; then
+    _osc133_precmd() {
+      local e=$?
+      printf '\033]133;D;%s\007' "$e"
+      printf '\033]7;file://%s%s\007' "${HOSTNAME:-$(hostname)}" "$PWD"
+      _osc133_armed=1
+    }
+    # DEBUG fires before every command; emit C once per prompt, and not for
+    # the PROMPT_COMMAND machinery itself or for completion.
+    _osc133_debug() {
+      [ -n "${COMP_LINE:-}" ] && return
+      [ "${_osc133_armed:-0}" = 1 ] || return
+      _osc133_armed=0
+      printf '\033]133;C\007'
+    }
+    PROMPT_COMMAND="_osc133_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+    trap '_osc133_debug' DEBUG
+    # \[ \] is bash's zero-width marker, same reason as zsh's %{ %}.
+    PS1='\[\033]133;A\007\]'"$PS1"'\[\033]133;B\007\]'
+  fi
+fi
+# <<< osc133 prompt marks (term-marks) <<<
+SNIPPET
+}
+
+case "${1:-}" in
+    --install)
+        host="${2:-}"
+        [[ -n $host ]] || { echo "term-marks: --install needs a host" >&2; exit 2; }
+        # Idempotent: the remote greps for the marker before appending, so
+        # re-running never doubles the block.
+        body=$(snippet)
+        for rc in .bashrc .zshrc; do
+            # Not a pipeline into ssh: keep the exit status of ssh itself.
+            if ssh "$host" "grep -qF '$MARKER' ~/$rc 2>/dev/null"; then
+                echo "  already present in $host:~/$rc"
+            else
+                printf '\n%s\n' "$body" | ssh "$host" "cat >> ~/$rc"
+                echo "  appended to $host:~/$rc"
+            fi
+        done
+        echo "Open a new shell on $host to pick it up."
+        ;;
+    --check)
+        # A shell that emits marks has the hooks registered. Checked in the
+        # CURRENT shell, so run it as `. term-marks --check` from zsh, or
+        # just look for the gutter marks in your terminal.
+        if [[ -n ${ZSH_VERSION:-} ]]; then
+            echo "zsh precmd hooks: ${precmd_functions[*]:-none}"
+        else
+            echo "PROMPT_COMMAND: ${PROMPT_COMMAND:-none}"
+        fi
+        ;;
+    -h|--help) sed -n '2,22p' "$0" ;;
+    "") snippet ;;
+    *) echo "term-marks: unknown option $1" >&2; exit 2 ;;
+esac
