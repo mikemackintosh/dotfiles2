@@ -300,6 +300,37 @@ an app that isn't installed is skipped and listed in the summary. Refuses to
 run under `sudo` (see the Install section for why). Tap-to-click, tap-drag and
 cursor *size* need a logout; cursor *colors* and scrolling apply live.
 
+### `term-marks` — prompt marks on remote hosts
+
+Marks are emitted by the **shell**, not the terminal, and reach your terminal
+as ordinary bytes in the stream. So `zsh/term-integration.zsh` gives you marks
+locally and nothing at all once you `ssh` somewhere — that remote shell needs
+its own emitter.
+
+```sh
+term-marks                            # print the snippet; paste into a remote rc
+term-marks --install user@host        # append it to the host's ~/.bashrc + ~/.zshrc
+term-marks --check                    # what the current shell has registered
+```
+
+The snippet is shell-portable (zsh hooks, or bash `PROMPT_COMMAND` + a `DEBUG`
+trap) and terminal-agnostic: OSC 133 is understood by iTerm2, kitty, WezTerm,
+Ghostty, Windows Terminal and recent VTE, and ignored byte-for-byte by
+everything else. There is no detection and nothing to configure. Verified
+emitting identical A/B/C/D streams — `D;1` after a failing command included —
+under both zsh and bash.
+
+`--install` greps for its own marker before appending, so re-running it never
+doubles the block.
+
+Navigating the marks is the one part that *can't* be portable: it's a function
+of the terminal's UI, not of the stream. In iTerm2 the default global key map
+binds `⌘↑`/`⌘↓` (`0xf700`/`0xf701` with modifier mask `0x300000`); `⇧⌘↑`/`⇧⌘↓`
+are bound to nothing, which is why pressing them types `;3A`/`;3B` into your
+command line — an unbound chord gets encoded and forwarded to the shell. To
+use those instead, bind them explicitly in Settings → Keys → Key Bindings with
+the action "Select Menu Item…" → Marks and Annotations → Next/Previous Mark.
+
 ### `iterm-themes` — install the color presets
 
 Imports `iterms/*.itermcolors` into iTerm2 as Custom Color Presets, so they

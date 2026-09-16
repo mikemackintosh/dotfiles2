@@ -440,15 +440,26 @@ check() {
         failed=1
     elif [[ ! -f "$BREWFILE" ]]; then
         info "no Brewfile at $BREWFILE"
-    elif brew bundle check --file="$BREWFILE" >/dev/null 2>&1; then
+    elif brew bundle check --file="$BREWFILE" --no-upgrade >/dev/null 2>&1; then
+        # --no-upgrade: an outdated formula is INSTALLED, which is what the
+        # doctor asks about. Without it `brew bundle check` counts anything
+        # stale as unsatisfied and the doctor is red most weeks, which trains
+        # you to ignore it. Staleness is reported below as information.
         ok "all packages present"
+        local stale="${TMPDIR:-/tmp}/dotfiles-outdated.$$"
+        brew outdated --quiet >"$stale" 2>/dev/null || true
+        if [[ -s $stale ]]; then
+            info "outdated (not a failure): $(tr '\n' ' ' <"$stale")"
+            info "  refresh with: brew upgrade"
+        fi
+        rm -f "$stale"
     else
         warn "missing packages — run: brew bundle --file=$BREWFILE"
         # Not a pipeline: `brew bundle check` exits non-zero by design here,
         # and under `set -o pipefail` that status would abort the doctor
         # before it printed the Apps section or its verdict.
         local detail="${TMPDIR:-/tmp}/dotfiles-bundle-check.$$"
-        brew bundle check --file="$BREWFILE" --verbose >"$detail" 2>&1 || true
+        brew bundle check --file="$BREWFILE" --verbose --no-upgrade >"$detail" 2>&1 || true
         sed 's/^/        /' "$detail"
         rm -f "$detail"
         failed=1
