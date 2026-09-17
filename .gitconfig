@@ -96,11 +96,22 @@
   insteadOf = ghub:
   insteadOf = github:
   insteadOf = http://github.com/
-  # NOT https://github.com/ — a global https->ssh rewrite breaks every
-  # tool that clones a public GitHub URL on a machine with no key yet.
-  # It is what made the Homebrew installer die with "Permission denied
-  # (publickey)" on a fresh Mac. If you want it, put it in
-  # ~/.private/gitconfig where it only applies once you have a key.
+  # Committing the https rewrite is safe here because keys come from the
+  # 1Password agent, which ssh/config wires up for Host * — so a machine
+  # with this config almost always has a key. The one bootstrap that runs
+  # before any key exists, the Homebrew installer, is pinned to
+  # GIT_CONFIG_GLOBAL=/dev/null in install.sh for exactly this reason.
+  # Residual trade: on a keyless machine, tools that clone a public GitHub
+  # https URL (go get, npm github: deps, pip VCS) fail until a key is added.
+  insteadOf = https://github.com/
+
+# Longest-prefix passthrough. Git applies the longest matching insteadOf,
+# and this one maps to itself, so Homebrew is exempt from the https->ssh
+# rewrite above and `brew update` keeps fetching taps over https.
+# Capital H matters: insteadOf matching is case-sensitive, so the lowercase
+# section below does not cover a real Homebrew remote.
+[url "https://github.com/Homebrew/"]
+  insteadOf = https://github.com/Homebrew/
 
 [url "https://github.com/homebrew/"]
   insteadOf = homebrew:
