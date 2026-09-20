@@ -315,17 +315,24 @@ if [[ -n ${CLAUDE_REVIEW_EXTRA_MOUNTS:-} ]]; then
 fi
 
 # SSH agent forwarding — for `git push` under passphrased keys AND for
-# SSH-based commit signing (1Password Agent). Prefer whatever SSH_AUTH_SOCK
-# already points at, but if that's the stock macOS Keychain agent or
-# unset, auto-detect 1Password's socket at its known location.
+# SSH-based commit signing (1Password agent).
+#
+# 1Password FIRST, deliberately. This used to prefer the inherited
+# SSH_AUTH_SOCK and fall back to 1Password only when the inherited one
+# looked like the macOS keychain agent — matched by path against
+# /var/run/com.apple.launchd.*/Listeners. macOS actually puts it under
+# /private/tmp/, so that test never fired: every run forwarded the
+# keychain agent, which holds no identities, and signing inside the
+# container failed with the agent one mount away. Preferring 1P also
+# means the socket lands at the literal path ~/.ssh/config names in
+# IdentityAgent, which is what makes `git push` resolve in there.
 one_p_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
 ssh_sock=""
-if [[ -n ${SSH_AUTH_SOCK:-} && -S ${SSH_AUTH_SOCK} \
-      && ${SSH_AUTH_SOCK} != /var/run/com.apple.launchd.*/Listeners ]]; then
-    ssh_sock=$SSH_AUTH_SOCK
-elif [[ -S $one_p_sock ]]; then
+if [[ -S $one_p_sock ]]; then
     ssh_sock=$one_p_sock
     echo "→ 1Password SSH agent detected — forwarding into container" >&2
+elif [[ -n ${SSH_AUTH_SOCK:-} && -S ${SSH_AUTH_SOCK} ]]; then
+    ssh_sock=$SSH_AUTH_SOCK
 fi
 
 if [[ -n $ssh_sock ]]; then

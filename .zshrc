@@ -110,6 +110,7 @@ dot_plugins=(
     "kube"
     "private"
     "zupershell"
+    "ssh-agent"
     "term-integration"
     "prompt"
     "mouse-guard"

@@ -15,11 +15,27 @@
 # Why: hardcoding op-ssh-sign makes every commit fail anywhere
 # /Applications is absent (containers, cloud sandboxes, Linux), even
 # when a forwarded agent holds the signing key. On the Mac this still
-# routes to 1Password, so you keep the approval prompt.
+# routes to 1Password, so you keep the approval prompt. A signer that is
+# PRESENT but broken falls through as well — see the retry below.
 
 set -euo pipefail
 
 op=/Applications/1Password.app/Contents/MacOS/op-ssh-sign
-[[ -x $op ]] && exec "$op" "$@"
+if [[ -x $op ]]; then
+    if "$op" "$@"; then
+        exit 0
+    else
+        status=$?
+        # Fall through rather than fail the commit. op-ssh-sign does not
+        # use the SSH agent socket — it talks to the app over s.sock in
+        # the same group container — and that IPC dies on its own (app
+        # update, agent toggled off) with "1Password: failed to fill
+        # whole buffer" while the agent itself still signs perfectly.
+        # ssh-keygen reaches the same key through the agent, and raises
+        # the same 1Password approval prompt, so a signature you denied
+        # stays denied.
+        echo "git-ssh-sign: op-ssh-sign failed ($status) — retrying via ssh-keygen" >&2
+    fi
+fi
 
 exec ssh-keygen "$@"
