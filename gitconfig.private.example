@@ -23,6 +23,9 @@
 # (containers, cloud sandboxes, Linux). Absolute path required — git
 # does not tilde-expand this key reliably. Adjust or delete if you sign
 # differently (GPG key, ssh-agent directly, or no signing at all).
+# On a remote host the path must exist on THAT machine — a Mac path
+# copied to a Linux box fails before signing ever reaches the forwarded
+# agent. See ssh-config.example.
 [gpg "ssh"]
   program = /Users/YOUR_USER/.dotfiles/bin/git-ssh-sign
 

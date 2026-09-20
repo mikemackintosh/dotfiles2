@@ -106,6 +106,15 @@ agent). The verification list — the one signing-related file safe to commit �
 is `~/.config/git/allowed_signers`; without it `git log --format=%G?` reports
 `U` and "No principal matched" even for good signatures.
 
+Signing from a host you are `ssh`'d into works the same way, with the agent
+forwarded rather than local — 1Password's own agent cannot serve a headless
+box, because every signature waits on an approval prompt on that machine's
+screen. `ForwardAgent yes` for that host (never `Host *`), then make sure the
+remote's `gpg.ssh.program` names a path that exists there; the Mac-absolute
+default is what usually fails first. Full recipe, including the ControlMaster
+and tmux traps, is in the comments of
+[`ssh-config.example`](ssh-config.example).
+
 ## tmux (prefix `C-b`)
 
 | Binding              | Action                                              |

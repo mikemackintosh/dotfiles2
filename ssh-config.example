@@ -34,6 +34,58 @@ Host github.com
   IdentityFile ~/.ssh/github-account.pub
 
 
+# --- Signing a commit on a REMOTE host ---------------------------------
+#
+# 1Password's agent is bound to the unlocked desktop app, so installing
+# 1Password on the remote box does not help: each signature raises an
+# approval prompt on THAT machine's screen and nobody is there to click
+# it, so the commit just hangs. Forward this Mac's agent instead and the
+# prompt lands where you are.
+#
+# Per-host, never in `Host *` — forwarding lends your whole keyring to
+# whoever is root on the far end, for as long as the session is up.
+#
+#   Host myremote
+#     ForwardAgent yes
+#
+# ForwardAgent is read at connection setup, so an already-open session
+# never picks it up — and ControlMaster silently reuses the old,
+# unforwarded connection. Drop the master, then check:
+#
+#   ssh -O exit myremote 2>/dev/null; ssh myremote 'ssh-add -l'
+#
+# Keys listed = the socket arrived. Nothing = remote sshd has
+# AllowAgentForwarding no, and no git config will save you.
+#
+# Then three things on the remote, each of which fails by blaming
+# something else:
+#
+#   1. gpg.ssh.program must name a file that exists THERE.
+#      ~/.private/gitconfig hardcodes /Users/<you>/.dotfiles/bin/... —
+#      on Linux that path is absent and signing dies before it reaches
+#      the agent. Clone the dotfiles and repoint it (bin/git-ssh-sign
+#      already falls through to ssh-keygen when /Applications is not),
+#      or unset the key and let git call ssh-keygen directly.
+#   2. user.signingkey must be the PUBLIC key text. `ssh-keygen -Y sign`
+#      uses it to select the matching private key out of the agent.
+#   3. OpenSSH >= 8.9 (`ssh -V`). Earlier ssh-keygen cannot sign with an
+#      agent-held key at all, and says so in the vocabulary of a bad key.
+#
+# Prove it before trusting it — this should prompt on the Mac:
+#
+#   echo test | ssh-keygen -Y sign -n git -f ~/.ssh/github-account.pub
+#
+# Copy the `Host github.com` block above to the remote too, or the
+# forwarded agent replays the deploy-key roulette described there.
+#
+# Under tmux, SSH_AUTH_SOCK names the socket from the login that created
+# the session. Reattach it from a later ssh and that path is dead —
+# "agent refused operation", with a live agent one hop away. Pin it:
+#
+#   ln -sf "$SSH_AUTH_SOCK" ~/.ssh/agent.sock    # at login
+#   export SSH_AUTH_SOCK=~/.ssh/agent.sock       # in the remote's rc
+#
+
 # --- Debugging a key that will not authenticate ------------------------
 #
 # `Permission denied (publickey,...)` never says WHICH problem you have,
