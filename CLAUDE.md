@@ -74,6 +74,8 @@ vim/                                      → vimrc + vendored plugins
 zsh/                                      → plugin files sourced by .zshrc
   prompt.zsh, prompt-themes.zsh             prompt engine + themes/shapes
   kube.zsh                                  `k` — kubectl in Docker (+ `kconfig`)
+  ssh-agent.zsh                             pins SSH_AUTH_SOCK to 1Password's
+                                            agent (macOS ships an empty one)
   term-integration.zsh                      OSC 133 marks, OSC 7 cwd, DEC 2026
   mouse-guard.zsh                           clears stuck mouse reporting after
                                             a dropped ssh/tmux session
@@ -109,6 +111,19 @@ expected on machines that haven't run `brew bundle`.
 - Commits are SSH-signed with a key from 1Password. If `~/.private/`
   is missing, git has no identity at all and every commit fails;
   `install.sh` now reports that instead of leaving you to guess.
+- `$SSH_AUTH_SOCK` on macOS points at an agent holding **nothing**
+  (`/private/tmp/com.apple.launchd.*/Listeners`). `ssh` does not care —
+  `IdentityAgent` in `~/.ssh/config` overrides it — so anything that
+  talks to the agent directly is the only thing that breaks, and it
+  breaks far from the cause: `ssh-keygen -Y sign` cannot sign, and
+  `claude-in-docker` forwarded that empty socket into the container for
+  months. `zsh/ssh-agent.zsh` pins it to 1Password's socket; don't
+  reintroduce a path-pattern test for "is this the keychain agent".
+- `op-ssh-sign` does not use the SSH agent socket — it talks to the
+  1Password app over `s.sock` in the same group container. That IPC can
+  die on its own ("failed to fill whole buffer") while the agent still
+  signs fine, so `bin/git-ssh-sign` retries with `ssh-keygen` when
+  op-ssh-sign *fails*, not just when it is absent.
 - A read-only **deploy key** in the 1Password agent can shadow your
   account key: ssh offers keys in agent order and stops at the first
   GitHub accepts, so pushes fail with "marked as read only" even

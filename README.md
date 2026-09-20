@@ -115,6 +115,17 @@ default is what usually fails first. Full recipe, including the ControlMaster
 and tmux traps, is in the comments of
 [`ssh-config.example`](ssh-config.example).
 
+`zsh/ssh-agent.zsh` pins `SSH_AUTH_SOCK` to 1Password's agent. macOS exports
+its own socket (`/private/tmp/com.apple.launchd.*/Listeners`) into every login
+session and that agent holds no keys — `ssh` never notices, because
+`IdentityAgent` in `~/.ssh/config` overrides the env var, so the breakage
+lands only on things that talk to the agent directly: `ssh-add -l`,
+`ssh-keygen -Y sign`, and `claude-in-docker` forwarding the socket into a
+container. `install.sh --check` now proves signing by signing a throwaway
+payload with the configured `gpg.ssh.program`; a locked 1Password or a dead
+`op-ssh-sign` IPC socket passes every static check and fails at your next
+commit instead.
+
 ## tmux (prefix `C-b`)
 
 | Binding              | Action                                              |

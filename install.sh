@@ -493,6 +493,48 @@ check() {
         else
             warn "$signers missing — good signatures show as untrusted. Run: install.sh"; failed=1
         fi
+
+        # Signing is only proven by signing. Everything above checks
+        # that the key is CONFIGURED; a locked or restarted 1Password,
+        # a dead op-ssh-sign IPC socket, or a gpg.ssh.program naming a
+        # path this machine does not have all pass those checks and
+        # fail at the next commit instead — which is how each of them
+        # was found. Expect a 1Password approval prompt here.
+        local d_fmt prog keyfile payload siglog
+        d_fmt="$(git config --get gpg.format || true)"
+        if [[ "$d_fmt" == ssh ]]; then
+            keyfile=""
+            if [[ "$d_key" == ssh-* ]]; then
+                keyfile="${TMPDIR:-/tmp}/dotfiles-signcheck.pub"
+                printf '%s\n' "$d_key" > "$keyfile"
+            elif [[ -r "${d_key/#\~/$HOME}" ]]; then
+                keyfile="${d_key/#\~/$HOME}"
+            fi
+            prog="$(git config --get gpg.ssh.program || true)"
+            [[ -n "$prog" ]] || prog="ssh-keygen"
+            prog="${prog/#\~/$HOME}"
+            if [[ -z "$keyfile" ]]; then
+                warn "cannot test signing — user.signingkey is neither key material nor readable"
+                failed=1
+            elif [[ "$prog" != ssh-keygen && ! -x "$prog" ]]; then
+                warn "gpg.ssh.program $prog is not executable here — every commit will fail"
+                failed=1
+            else
+                payload="${TMPDIR:-/tmp}/dotfiles-signcheck.payload.$$"
+                siglog="${TMPDIR:-/tmp}/dotfiles-signcheck.log.$$"
+                echo dotfiles > "$payload"
+                if "$prog" -Y sign -n git -f "$keyfile" < "$payload" >"$siglog" 2>&1; then
+                    ok "signing works ($(basename "$prog"))"
+                else
+                    local rc=$? detail
+                    detail="$(tail -n1 "$siglog")"
+                    [[ -n "$detail" ]] || detail="exit $rc, no output"
+                    warn "signing FAILS ($(basename "$prog")): $detail"
+                    failed=1
+                fi
+                rm -f "$payload" "$siglog"
+            fi
+        fi
     fi
 
     step "Container runtime"
