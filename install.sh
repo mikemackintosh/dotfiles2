@@ -62,6 +62,104 @@ brew_shellenv() {
     return 1
 }
 
+# ------------------------------------------------------- signing probes
+
+# The keys live in 1Password and only a human can put them there, so the
+# most an installer can do is prove which link in the chain is missing.
+# These two probes are shared by the install path and the doctor.
+
+ONE_P_SOCK="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+SIGN_KEYFILE=""; SIGN_DETAIL=""; SIGN_PROG=""; AGENT_DETAIL=""
+
+# user.signingkey is either literal key material or a path to a .pub.
+# Normalizes both into a readable file at $SIGN_KEYFILE.
+signing_keyfile() {
+    local key; key="$(git config --get user.signingkey || true)"
+    SIGN_KEYFILE=""
+    if [[ "$key" == ssh-* ]]; then
+        SIGN_KEYFILE="${TMPDIR:-/tmp}/dotfiles-signingkey.pub"
+        printf '%s\n' "$key" > "$SIGN_KEYFILE"
+    elif [[ -r "${key/#\~/$HOME}" ]]; then
+        SIGN_KEYFILE="${key/#\~/$HOME}"
+    else
+        return 1
+    fi
+}
+
+# Is 1Password's agent running AND serving the key git signs with?
+# 0 = yes, 1 = no agent socket, 2 = agent up but not offering that key.
+agent_probe() {
+    AGENT_DETAIL=""
+    if [[ ! -S "$ONE_P_SOCK" ]]; then
+        AGENT_DETAIL="no agent socket — turn on 1Password → Settings → Developer → Use the SSH agent"
+        return 1
+    fi
+    if ! signing_keyfile; then
+        AGENT_DETAIL="user.signingkey is neither key material nor a readable file"
+        return 2
+    fi
+    local fp listing
+    # Exit status of this pipeline is irrelevant — an empty $fp is the
+    # failure signal, and it is tested below.
+    fp="$(ssh-keygen -lf "$SIGN_KEYFILE" 2>/dev/null | awk '{print $2}')"
+    listing="${TMPDIR:-/tmp}/dotfiles-agentprobe.$$"
+    SSH_AUTH_SOCK="$ONE_P_SOCK" ssh-add -l >"$listing" 2>&1 || true
+    if [[ -n "$fp" ]] && grep -qF "$fp" "$listing"; then
+        AGENT_DETAIL="$fp"
+        rm -f "$listing"
+        return 0
+    fi
+    AGENT_DETAIL="agent is running but does not offer ${fp:-the signing key} — check the key's vault is one the agent may serve (~/.config/1Password/ssh/agent.toml)"
+    rm -f "$listing"
+    return 2
+}
+
+# Signing is only proven by signing. Everything else checks that a key is
+# CONFIGURED; a locked 1Password, a dead op-ssh-sign IPC socket, or a
+# gpg.ssh.program naming a path this host does not have all pass those
+# checks and fail at your next commit instead. Expect an approval prompt.
+# 0 = signed, 1 = failed, 2 = not SSH-signing, nothing to prove.
+sign_probe() {
+    SIGN_DETAIL=""; SIGN_PROG=""
+    local fmt; fmt="$(git config --get gpg.format || true)"
+    if [[ "$fmt" != ssh ]]; then
+        SIGN_DETAIL="not SSH-signing (gpg.format=${fmt:-unset}) — nothing to prove"
+        return 2
+    fi
+    if ! signing_keyfile; then
+        SIGN_DETAIL="user.signingkey is neither key material nor a readable file"
+        return 1
+    fi
+    local prog; prog="$(git config --get gpg.ssh.program || true)"
+    [[ -n "$prog" ]] || prog="ssh-keygen"
+    prog="${prog/#\~/$HOME}"
+    SIGN_PROG="$(basename "$prog")"
+    if [[ "$prog" != ssh-keygen && ! -x "$prog" ]]; then
+        SIGN_DETAIL="gpg.ssh.program $prog does not exist on this host — every commit dies before reaching the agent"
+        return 1
+    fi
+    local payload log rc=0
+    payload="${TMPDIR:-/tmp}/dotfiles-signprobe.$$"
+    log="${TMPDIR:-/tmp}/dotfiles-signprobe.log.$$"
+    echo dotfiles > "$payload"
+    # Point the signer at 1Password's agent explicitly. install.sh runs
+    # before zsh/ssh-agent.zsh has ever been sourced — on a new host the
+    # inherited SSH_AUTH_SOCK is still macOS's empty agent, and ssh-keygen
+    # would fail for a reason the user does not actually have.
+    local sock="${SSH_AUTH_SOCK:-}"
+    [[ -S "$ONE_P_SOCK" ]] && sock="$ONE_P_SOCK"
+    if SSH_AUTH_SOCK="$sock" "$prog" -Y sign -n git -f "$SIGN_KEYFILE" < "$payload" >"$log" 2>&1; then
+        SIGN_DETAIL="$SIGN_PROG"
+    else
+        rc=$?
+        SIGN_DETAIL="$(tail -n1 "$log")"
+        [[ -n "$SIGN_DETAIL" ]] || SIGN_DETAIL="exit $rc, no output"
+        rc=1
+    fi
+    rm -f "$payload" "$log"
+    return $rc
+}
+
 # Ask for sudo once, up front, and hold the ticket for the whole run.
 # Without this the password prompt lands 4 minutes in, behind a wall of
 # brew output, and the install silently stalls waiting on it.
@@ -341,6 +439,45 @@ do_gitidentity() {
     fi
 }
 
+# ------------------------------------------------------ ssh + signing
+
+# The half of the setup no script can do: the keys live in 1Password and
+# only you can put them there and register them on GitHub. What this step
+# does is prove which link is missing on THIS host, and put the exact
+# next action in the TODO list rather than letting you discover it at
+# your first commit or push.
+do_ssh() {
+    step "SSH agent + signing"
+
+    if [[ -f "$HOME/.ssh/config" ]]; then
+        ok "~/.ssh/config"
+    else
+        todo "No ~/.ssh/config — cp $DOTFILES/ssh-config.example ~/.ssh/config && chmod 600 ~/.ssh/config"
+    fi
+
+    local rc=0
+    agent_probe || rc=$?
+    case "$rc" in
+        0) ok "1Password agent serves the signing key" ;;
+        *) todo "1Password SSH agent: $AGENT_DETAIL" ;;
+    esac
+
+    rc=0
+    sign_probe || rc=$?
+    case "$rc" in
+        0) ok "signing works ($SIGN_PROG)" ;;
+        2) info "$SIGN_DETAIL" ;;
+        *) todo "Commits cannot be signed: $SIGN_DETAIL" ;;
+    esac
+
+    # Not checkable from here — GitHub needs the key twice, under two
+    # different headings, and nothing local can see either. `gh` is
+    # denied in this repo on purpose, and we are not going to make a
+    # network call from an installer to find out.
+    info "GitHub needs this key registered TWICE: as an Authentication key"
+    info "(to push) and again as a Signing key (for Verified commits)."
+}
+
 # --------------------------------------------------------- login shell
 
 do_shell() {
@@ -494,47 +631,29 @@ check() {
             warn "$signers missing — good signatures show as untrusted. Run: install.sh"; failed=1
         fi
 
-        # Signing is only proven by signing. Everything above checks
-        # that the key is CONFIGURED; a locked or restarted 1Password,
-        # a dead op-ssh-sign IPC socket, or a gpg.ssh.program naming a
-        # path this machine does not have all pass those checks and
-        # fail at the next commit instead — which is how each of them
-        # was found. Expect a 1Password approval prompt here.
-        local d_fmt prog keyfile payload siglog
-        d_fmt="$(git config --get gpg.format || true)"
-        if [[ "$d_fmt" == ssh ]]; then
-            keyfile=""
-            if [[ "$d_key" == ssh-* ]]; then
-                keyfile="${TMPDIR:-/tmp}/dotfiles-signcheck.pub"
-                printf '%s\n' "$d_key" > "$keyfile"
-            elif [[ -r "${d_key/#\~/$HOME}" ]]; then
-                keyfile="${d_key/#\~/$HOME}"
-            fi
-            prog="$(git config --get gpg.ssh.program || true)"
-            [[ -n "$prog" ]] || prog="ssh-keygen"
-            prog="${prog/#\~/$HOME}"
-            if [[ -z "$keyfile" ]]; then
-                warn "cannot test signing — user.signingkey is neither key material nor readable"
-                failed=1
-            elif [[ "$prog" != ssh-keygen && ! -x "$prog" ]]; then
-                warn "gpg.ssh.program $prog is not executable here — every commit will fail"
-                failed=1
-            else
-                payload="${TMPDIR:-/tmp}/dotfiles-signcheck.payload.$$"
-                siglog="${TMPDIR:-/tmp}/dotfiles-signcheck.log.$$"
-                echo dotfiles > "$payload"
-                if "$prog" -Y sign -n git -f "$keyfile" < "$payload" >"$siglog" 2>&1; then
-                    ok "signing works ($(basename "$prog"))"
-                else
-                    local rc=$? detail
-                    detail="$(tail -n1 "$siglog")"
-                    [[ -n "$detail" ]] || detail="exit $rc, no output"
-                    warn "signing FAILS ($(basename "$prog")): $detail"
-                    failed=1
-                fi
-                rm -f "$payload" "$siglog"
-            fi
-        fi
+        # Proof, not configuration — see sign_probe. This is the check
+        # that catches a locked 1Password or a dead op-ssh-sign socket,
+        # both of which pass every check above.
+        local s_rc=0
+        sign_probe || s_rc=$?
+        case "$s_rc" in
+            0) ok "signing works ($SIGN_PROG)" ;;
+            2) info "$SIGN_DETAIL" ;;
+            *) warn "signing FAILS: $SIGN_DETAIL"; failed=1 ;;
+        esac
+    fi
+
+    step "SSH agent"
+    local a_rc=0
+    agent_probe || a_rc=$?
+    case "$a_rc" in
+        0) ok "1Password agent serves the signing key" ;;
+        *) warn "$AGENT_DETAIL"; failed=1 ;;
+    esac
+    if [[ -f "$HOME/.ssh/config" ]]; then
+        ok "~/.ssh/config"
+    else
+        warn "no ~/.ssh/config — cp $DOTFILES/ssh-config.example ~/.ssh/config"; failed=1
     fi
 
     step "Container runtime"
@@ -654,15 +773,18 @@ main() {
         links)             preflight; do_links; summary; exit 0 ;;
         brew)              preflight; do_brew;  summary; exit 0 ;;
         macos)             exec "$DOTFILES/bin/macos-defaults" ;;
+        # No preflight: this step touches nothing and needs no sudo.
+        ssh)               do_ssh; summary; exit 0 ;;
         --no-macos)        run_macos=0 ;;
         "")                ;;
-        *) die "Usage: $0 [--check|--no-macos|links|brew|macos]" ;;
+        *) die "Usage: $0 [--check|--no-macos|links|brew|macos|ssh]" ;;
     esac
 
     preflight
     do_brew          # first: everything below wants git, dockutil, zsh
     do_links
     do_gitidentity
+    do_ssh
     do_shell
     (( run_macos )) && do_macos
     summary

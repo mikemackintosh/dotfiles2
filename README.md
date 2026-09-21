@@ -38,8 +38,47 @@ list at the end, with the exact command to finish it.
 ~/.dotfiles/install.sh links             # symlinks only
 ~/.dotfiles/install.sh brew              # Homebrew + Brewfile only
 ~/.dotfiles/install.sh macos             # system prefs only
+~/.dotfiles/install.sh ssh               # re-check 1Password agent + signing
 ```
 
+### After the run — the parts no script can do
+
+`install.sh` prints these as a numbered TODO list when it finds them undone,
+and `install.sh --check` re-audits at any time. In dependency order — each
+step is useless until the one above it is true:
+
+1. **Install 1Password and turn its SSH agent on** — Settings → Developer →
+   *Use the SSH agent*. Nothing else here works without it: the private keys
+   exist only in the vault, and the agent is the only thing that can use
+   them. The tell is `~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock`
+   existing.
+2. **Put the signing key in a vault the agent is allowed to serve.** If you
+   have written `~/.config/1Password/ssh/agent.toml` by hand, a key outside
+   the vaults it lists is invisible to the agent even though it is in your
+   account. `ssh-add -l` lists exactly what the agent will offer.
+3. **`cp gitconfig.private.example ~/.private/gitconfig`** and fill in
+   `user.name`, `user.email` and `user.signingkey` (the **public** key text).
+   Leave `gpg.ssh.program` pointing at `bin/git-ssh-sign` with an absolute
+   path — git does not tilde-expand that key, and the wrapper is what makes
+   a flaky or absent `op-ssh-sign` non-fatal.
+4. **`cp ssh-config.example ~/.ssh/config && chmod 600 ~/.ssh/config`**, then
+   write your account public key to `~/.ssh/github-account.pub` — the
+   `Host github.com` block names it to stop a deploy key from shadowing your
+   account key.
+5. **Register the key on GitHub twice**: once as an **Authentication key** so
+   you can push, and again as a **Signing key** so commits show as Verified.
+   Same key, two separate entries, and the only step here that nothing local
+   can verify for you.
+6. **Re-run `install.sh ssh`.** It signs a throwaway payload with your real
+   configured signer and must print both `1Password agent serves the signing
+   key` and `signing works`. Anything else and your next commit fails, not
+   your next check.
+7. **Open a new terminal.** `zsh/ssh-agent.zsh` only pins `SSH_AUTH_SOCK` for
+   shells started after the install; the one you ran the installer in still
+   has macOS's empty agent.
+
+Then Full Disk Access and the logout for the macOS prefs, both of which
+`install.sh` will have already listed for you.
 
 ### Git identity and signing
 
