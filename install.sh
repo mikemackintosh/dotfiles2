@@ -11,6 +11,7 @@
 #   install.sh links            symlinks only
 #   install.sh brew             Homebrew + Brewfile only
 #   install.sh macos            system prefs only (bin/macos-defaults)
+#   install.sh identity [ARGS]  pick signing/push keys from 1Password (bin/git-identity)
 set -euo pipefail
 
 DOTFILES="$(cd "$(dirname "$0")" && pwd)"
@@ -75,6 +76,7 @@ SIGN_KEYFILE=""; SIGN_DETAIL=""; SIGN_PROG=""; AGENT_DETAIL=""
 # Normalizes both into a readable file at $SIGN_KEYFILE.
 signing_keyfile() {
     local key; key="$(git config --get user.signingkey || true)"
+    key="${key#key::}"
     SIGN_KEYFILE=""
     if [[ "$key" == ssh-* ]]; then
         SIGN_KEYFILE="${TMPDIR:-/tmp}/dotfiles-signingkey.pub"
@@ -394,9 +396,26 @@ do_links() {
 do_gitidentity() {
     step "Git identity"
 
-    local priv="$HOME/.private/gitconfig"
+    local priv="$HOME/.private/gitconfig" picker="$DOTFILES/bin/git-identity"
+    local toml="$HOME/.config/1Password/ssh/agent.toml" why=""
+    if [[ ! -f "$priv" || -z "$(git config --get user.signingkey || true)" ]]; then
+        why="No signing identity yet."
+    elif [[ ! -f "$toml" ]]; then
+        # Identity exists but the agent offers keys in its own order, so a
+        # deploy key can still shadow the account key on push.
+        why="Key order is not pinned (no agent.toml)."
+    fi
+    if [[ -n "$why" && -t 0 && -t 1 && -x "$picker" ]]; then
+        # Interactive: the picker fills the files from what the 1Password
+        # agent offers. Non-interactive runs get the TODO below instead.
+        local REPLY
+        read -r -p "    $why Pick keys from 1Password now? [Y/n] " REPLY </dev/tty || REPLY=n
+        if [[ "${REPLY:-y}" == [Yy]* ]]; then
+            "$picker" base || warn "picker did not finish — run: install.sh identity"
+        fi
+    fi
     if [[ ! -f "$priv" ]]; then
-        todo "No $priv — copy gitconfig.private.example there and fill it in, or git has no identity and every commit fails."
+        todo "No $priv — run: install.sh identity  (or copy gitconfig.private.example there by hand). Until then git has no identity and every commit fails."
         return 0
     fi
     ok "$priv"
@@ -404,6 +423,7 @@ do_gitidentity() {
     local email key fmt
     email="$(git config --get user.email || true)"
     key="$(git config --get user.signingkey || true)"
+    key="${key#key::}"
     fmt="$(git config --get gpg.format || true)"
 
     if [[ -n "$email" ]]; then ok "user.email $email"
@@ -610,6 +630,7 @@ check() {
     local d_email d_key
     d_email="$(git config --get user.email || true)"
     d_key="$(git config --get user.signingkey || true)"
+    d_key="${d_key#key::}"
     [[ -n "$d_email" ]] && ok "user.email $d_email" \
         || { warn "user.email unset — git cannot commit"; failed=1; }
     if [[ -z "$d_key" ]]; then
@@ -703,14 +724,10 @@ check() {
     [[ "$theme" == "5" ]] && ok "iTerm2 theme Minimal" \
         || warn "iTerm2 theme is not Minimal — run: macos-defaults"
 
-    step "SSH"
-    # A read-only deploy key in the agent can shadow the account key and make
-    # every push fail "marked as read only" while auth still succeeds.
-    if grep -qs "IdentitiesOnly" "$HOME/.ssh/config"; then
-        ok "github.com key pinned in ~/.ssh/config"
-    else
-        warn "no IdentitiesOnly pin in ~/.ssh/config — a deploy key can shadow your account key. See ssh-config.example"
-    fi
+    # Which key signs and pushes where, and whether agent.toml pins the
+    # agent order so a read-only deploy key cannot shadow the account key.
+    # bin/git-identity owns that view and prints its own steps.
+    "$DOTFILES/bin/git-identity" status || failed=1
 
     step "Apps"
     local app
@@ -775,9 +792,10 @@ main() {
         macos)             exec "$DOTFILES/bin/macos-defaults" ;;
         # No preflight: this step touches nothing and needs no sudo.
         ssh)               do_ssh; summary; exit 0 ;;
+        identity)          exec "$DOTFILES/bin/git-identity" "${@:2}" ;;
         --no-macos)        run_macos=0 ;;
         "")                ;;
-        *) die "Usage: $0 [--check|--no-macos|links|brew|macos|ssh]" ;;
+        *) die "Usage: $0 [--check|--no-macos|links|brew|macos|ssh|identity]" ;;
     esac
 
     preflight
