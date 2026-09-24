@@ -12,13 +12,11 @@ One command, from a Mac with nothing on it but macOS:
 git clone <repo-url> ~/.dotfiles
 ~/.dotfiles/install.sh                   # everything, in dependency order
 
-# Identity (never committed)
-cp ~/.dotfiles/gitconfig.private.example ~/.private/gitconfig
-$EDITOR ~/.private/gitconfig             # fill in name/email/signing key
+# Identity (never committed) — pick signing + push keys from 1Password
+~/.dotfiles/install.sh identity          # writes ~/.private/gitconfig + agent.toml
 
-# SSH keys + signing (never committed)
-cp ~/.dotfiles/ssh-config.example ~/.ssh/config
-$EDITOR ~/.ssh/config                    # point IdentityFile at your key
+# SSH client config (never committed)
+cp ~/.dotfiles/ssh-config.example ~/.ssh/config && chmod 600 ~/.ssh/config
 ```
 
 `install.sh` runs, in this order: preflight (Command Line Tools, Xcode
@@ -56,15 +54,17 @@ step is useless until the one above it is true:
    have written `~/.config/1Password/ssh/agent.toml` by hand, a key outside
    the vaults it lists is invisible to the agent even though it is in your
    account. `ssh-add -l` lists exactly what the agent will offer.
-3. **`cp gitconfig.private.example ~/.private/gitconfig`** and fill in
-   `user.name`, `user.email` and `user.signingkey` (the **public** key text).
-   Leave `gpg.ssh.program` pointing at `bin/git-ssh-sign` with an absolute
-   path — git does not tilde-expand that key, and the wrapper is what makes
-   a flaky or absent `op-ssh-sign` non-fatal.
-4. **`cp ssh-config.example ~/.ssh/config && chmod 600 ~/.ssh/config`**, then
-   write your account public key to `~/.ssh/github-account.pub` — the
-   `Host github.com` block names it to stop a deploy key from shadowing your
-   account key.
+3. **`install.sh identity`** (or `git-identity base`). It lists the keys the
+   agent offers, asks which one signs and which one pushes, and writes
+   `~/.private/gitconfig`, `~/.config/1Password/ssh/agent.toml` and
+   `allowed_signers` from the answers. Public material only; `~/.ssh` is never
+   touched. `install.sh` offers this itself when it finds no identity. By hand
+   instead: `cp gitconfig.private.example ~/.private/gitconfig` and fill in
+   `user.name`, `user.email`, `user.signingkey` (the **public** key text),
+   leaving `gpg.ssh.program` on `bin/git-ssh-sign` with an absolute path.
+4. **`cp ssh-config.example ~/.ssh/config && chmod 600 ~/.ssh/config`**. Key
+   order comes from `agent.toml`, so no per-host pin is needed; the example
+   keeps a commented `Host github.com` block for the rare case it is.
 5. **Register the key on GitHub twice**: once as an **Authentication key** so
    you can push, and again as a **Signing key** so commits show as Verified.
    Same key, two separate entries, and the only step here that nothing local
@@ -136,6 +136,12 @@ The public `.gitconfig` contains zero personal data. Identity lives in
 For work commits under `~/go/src/github.com/wealthsimple/...`, an `includeIf`
 overlay auto-swaps `user.email` to the work address from
 `~/.private/gitconfig-work`. Other paths keep the personal email.
+`git-identity overlay DIR` writes that file — name, email, signing key and,
+optionally, a per-path push key behind `core.sshCommand` — and declares the
+`includeIf` in `~/.private/gitconfig` when the tracked config does not already.
+A machine that is *only* work needs no overlay: make the work identity the
+base one. Which keys a Mac offers at all is `agent.toml`, per machine, so a
+personal Mac can leave the work key out entirely.
 
 Commits and tags are SSH-signed. `gpg.ssh.program` points at
 [`bin/git-ssh-sign`](bin/git-ssh-sign) rather than 1Password directly, so the
@@ -308,6 +314,25 @@ Both `git-review` and `git-feature` use:
   + docker CLI + `@anthropic-ai/claude-code`). Built lazily by
   `claude-in-docker` on first use, or ahead of time with
   `docker build -t claude-review:local ~/.dotfiles/docker/claude-review/`.
+
+### `git-identity` — pick which 1Password key signs and pushes
+
+```sh
+git-identity                # fzf picker (numbered menus until fzf is installed)
+git-identity base           # this machine: ~/.private/gitconfig + agent.toml
+git-identity overlay DIR    # repos under DIR: ~/.private/gitconfig-NAME + includeIf
+git-identity status         # what install.sh --check runs; exit 1 on trouble
+git-identity list           # what the agent offers right now
+```
+
+Reads the agent, never `~/.ssh`. Base mode writes `user.signingkey` as public
+text, then `agent.toml` with the push key first — an allowlist, so keys you
+leave out vanish from this Mac's agent once 1Password relocks — and proves the
+result by signing a payload and asking GitHub who the push key is (`Hi user!`
+is good; `Hi owner/repo!` is a deploy key). Overlay mode never touches
+`agent.toml`; a per-path push key needs a selector, which lands as
+`~/.private/NAME.pub` behind `core.sshCommand`. Runs on the bash macOS ships,
+so it works before brew. Full notes: [`docs/git-identity.md`](docs/git-identity.md).
 
 ### `git-ssh-sign` — pick whichever SSH signer exists
 

@@ -36,6 +36,8 @@ bin/                                      → user scripts (on $PATH)
   tmux-sessionizer                          fzf project picker (prefix+T in tmux)
   git-review                                local PR review via /tmp + containerized claude
   git-feature                               new feature/bug branch + containerized claude in tmux
+  git-identity                              picker: which 1Password key signs/pushes,
+                                            per machine (agent.toml) or per repo path
   pr-spin                                   back-compat symlink → git-feature
   claude-in-docker                          runs claude with narrow host mounts (safe --dangerously-*)
   codex-security                            npx codex-security + seccomp=unconfined (bwrap needs it)
@@ -133,6 +135,10 @@ expected on machines that haven't run `brew bundle`.
 - `core.hooksPath = ~/.dotfiles/githooks` is global. If a repo
   needs its own hooks (rare), opt out with:
   `git config --local core.hooksPath .git/hooks`.
+- `~/.config/1Password/ssh/agent.toml` is an ALLOWLIST, not a sort: once it
+  exists the agent serves only the items listed. `bin/git-identity` writes
+  it; hand-editing it to drop a key silently breaks every host using that
+  key, and the change only lands after 1Password relocks or restarts.
 - `~/.dotfiles/bin` is on `$PATH` (set in `.zshrc`). Any new script
   there is auto-callable from anywhere; `install.sh` chmod's every
   real file in `bin/` by glob (skipping the docker-shim symlinks),
