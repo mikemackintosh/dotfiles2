@@ -1,5 +1,5 @@
 {
-  "model": "opus[1m]",
+  "model": "opus",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [
@@ -36,18 +36,20 @@
   },
   "enabledPlugins": {
     "gopls-lsp@claude-plugins-official": true,
-    "swift-lsp@claude-plugins-official": true
+    "swift-lsp@claude-plugins-official": true,
+    "rust-analyzer-lsp@claude-plugins-official": true
   },
+  "tui": "fullscreen",
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
   "agentPushNotifEnabled": true,
-  "tui": "fullscreen",
   "permissions": {
     "allow": [
       "Bash(git commit)",
       "Bash(git commit *)",
       "Bash(git push)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "mcp__mcplocker"
     ],
     "deny": [
       "Bash(gh)",
