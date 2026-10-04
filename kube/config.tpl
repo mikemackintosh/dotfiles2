@@ -1,6 +1,6 @@
 # Rendered by `kuse <name>` (zsh/kube.zsh) through `op inject`. No secrets
-# here: each op:// value resolves from the 1Password item kube-<name> in
-# $KUBE_OP_VAULT, which needs the fields server, ca and token. __NAME__ is
+# here: each op:// value resolves from the 1Password item kuse picks for
+# <name> (see KUBE_CLUSTERS), which needs the fields server, ca and token. __NAME__ is
 # swapped for <name> before op sees the file. A cluster that needs another
 # shape (exec auth, client certs) gets its own ~/.kube/<name>.tpl instead.
 apiVersion: v1

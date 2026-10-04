@@ -527,9 +527,9 @@ Override per-machine in `zsh/private.zsh`, or per-repo with a direnv `.envrc`:
 #### `kuse` — per-cluster kubeconfig from 1Password
 
 `kube/config.tpl` is a kubeconfig whose every value is an `op://` reference, so
-the repo holds no endpoint, CA or token. `kuse prod` fills it from the
-1Password item `kube-prod` (fields `server`, `ca`, `token`) in
-`$KUBE_OP_VAULT` (default `Personal`), writes it 0600 into a per-shell temp
+the repo holds no endpoint, CA or token. `kuse prod` fills it from a
+1Password item with fields `server`, `ca` and `token` — by default `kube-prod`
+in `$KUBE_OP_VAULT` (`Personal`), or wherever `KUBE_CLUSTERS` says — writes it 0600 into a per-shell temp
 dir, and points both `KUBECONFIG` and `k` at it. The file is deleted on
 `kuse -` or when the shell exits.
 
@@ -540,9 +540,17 @@ kuse -           # forget it, delete the file
 ```
 
 A cluster with a different shape (exec auth for EKS/GKE, client certs) gets
-its own `~/.kube/<name>.tpl`, which wins over the repo template. Cluster names
-are yours to keep private: put `KUBE_CLUSTERS=(prod staging)` (tab
-completion) and `alias kprod='kuse prod'` in `~/.private/kube.zsh`.
+its own `~/.kube/<name>.tpl`, which wins over the repo template. Cluster names and
+vaults stay private in `~/.private/kube.zsh`; the keys also drive tab completion:
+
+```zsh
+KUBE_CLUSTERS=(
+  prod-us   Ops              # vault; item defaults to kube-prod-us
+  prod-eu   Ops-EU
+  edge      Infra/k8s-edge   # vault/item
+)
+alias kprod='kuse prod-us'
+```
 
 ## Prompt
 

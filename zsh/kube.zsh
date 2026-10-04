@@ -67,14 +67,14 @@ kconfig() {
 #   kuse -         forget it and delete the rendered file
 #
 # Template: ~/.kube/<name>.tpl if present, else kube/config.tpl in this repo.
-# Cluster names for completion and aliases belong in ~/.private/*.zsh, e.g.
-#   KUBE_CLUSTERS=(prod staging); alias kprod='kuse prod'
-#
-#   KUBE_OP_VAULT   1Password vault holding the kube-<name> items (default: Personal)
+# Where each cluster lives belongs in ~/.private/*.zsh, not here:
+#   KUBE_CLUSTERS=(prod-us Ops  prod-eu Ops-EU  edge Infra/k8s-edge)
+# Value is a vault (item defaults to kube-<name>) or vault/item. Unlisted
+# names fall back to kube-<name> in $KUBE_OP_VAULT (default: Personal).
 
 : ${KUBE_OP_VAULT:=Personal}
 : ${KUBE_TEMPLATE:=${0:A:h:h}/kube/config.tpl}
-typeset -ga KUBE_CLUSTERS
+typeset -gA KUBE_CLUSTERS
 
 kuse() {
   local name=$1
@@ -93,6 +93,10 @@ kuse() {
     return 127
   fi
 
+  local ref=${KUBE_CLUSTERS[$name]:-$KUBE_OP_VAULT}
+  local vault=${ref%%/*} item=kube-$name
+  [[ $ref == */* ]] && item=${ref#*/}
+
   local tpl=$HOME/.kube/$name.tpl
   [[ -f $tpl ]] || tpl=$KUBE_TEMPLATE
   [[ -f $tpl ]] || { print -u2 "kuse: no template: $tpl"; return 1 }
@@ -109,12 +113,12 @@ kuse() {
   # op wants -i or a pipe; it reads a here-string as empty stdin.
   print -r -- "${body//__NAME__/$name}" >| $in || return
   ( umask 077
-    KUBE_OP_VAULT=$KUBE_OP_VAULT KUBE_OP_ITEM=kube-$name \
+    KUBE_OP_VAULT=$vault KUBE_OP_ITEM=$item \
       op inject -f -i "$in" -o "$out" >/dev/null ) || rc=$?
   rm -f -- "$in"
   if (( rc )); then
     rm -f -- "$out"
-    print -u2 "kuse: op inject failed for $KUBE_OP_VAULT/kube-$name"
+    print -u2 "kuse: op inject failed for $vault/$item"
     return 1
   fi
 
@@ -134,7 +138,7 @@ add-zsh-hook zshexit _kube_forget
 
 _kuse() {
   local -a names
-  names=(${KUBE_CLUSTERS[@]} $HOME/.kube/*.tpl(N:t:r))
+  names=(${(k)KUBE_CLUSTERS} $HOME/.kube/*.tpl(N:t:r))
   compadd -- - ${(u)names}
 }
 (( $+functions[compdef] )) && compdef _kuse kuse
