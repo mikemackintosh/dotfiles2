@@ -58,7 +58,8 @@ step is useless until the one above it is true:
    agent offers, asks which one signs and which one pushes, and writes
    `~/.private/gitconfig`, `~/.config/1Password/ssh/agent.toml` and
    `allowed_signers` from the answers. Public material only; `~/.ssh` is never
-   touched. `install.sh` offers this itself when it finds no identity. By hand
+   touched. `install.sh` offers this itself when it finds no identity or no
+   `agent.toml`, and `--check` fails until `agent.toml` exists. By hand
    instead: `cp gitconfig.private.example ~/.private/gitconfig` and fill in
    `user.name`, `user.email`, `user.signingkey` (the **public** key text),
    leaving `gpg.ssh.program` on `bin/git-ssh-sign` with an absolute path.

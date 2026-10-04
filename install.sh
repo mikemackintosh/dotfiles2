@@ -443,6 +443,11 @@ do_gitidentity() {
         return 0
     fi
     ok "$priv"
+    if [[ -f "$toml" ]]; then
+        ok "agent.toml pins the key order"
+    else
+        todo "No agent.toml — run: git-identity base. Until then 1Password offers keys in its own order, and a read-only deploy key can win the push."
+    fi
 
     local email key fmt
     email="$(git config --get user.email || true)"
@@ -662,6 +667,12 @@ check() {
 
     step "Git identity"
     local priv="$HOME/.private/gitconfig"
+    if [[ -f "$HOME/.config/1Password/ssh/agent.toml" ]]; then
+        ok "agent.toml pins the key order"
+    else
+        warn "no agent.toml — a read-only deploy key can win the push. Run: git-identity base"
+        failed=1
+    fi
     local signers="$HOME/.config/git/allowed_signers"
     if [[ -f "$priv" ]]; then ok "$priv"
     else warn "$priv missing — copy gitconfig.private.example there"; failed=1; fi
