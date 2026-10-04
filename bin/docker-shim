@@ -19,6 +19,8 @@
 #
 # Pass host env by NAME:    DOCKER_SHIM_ENV="DATABASE_URL API_KEY" npm start
 #                           (nothing is inherited otherwise; values stay off argv)
+# Git over 1Password:       DOCKER_SHIM_GIT=1 go get ./…   (forwards the SSH
+#                           agent for push/pull/signing; off by default — see below)
 # Extra RW mounts:          DOCKER_SHIM_MOUNTS=~/src/lib:~/src/other npm …
 # Old whole-$HOME mount:    DOCKER_SHIM_HOME=host npm …
 #
@@ -225,6 +227,51 @@ else
     done
   fi
 fi
+# Git inside the container. `safe.directory=*` is ALWAYS set: Docker Desktop
+# presents the mounted project as root-owned, so without it any git call (a
+# `go get`, an npm git dep, a build script) dies with "dubious ownership".
+# It only lets git read a tree we already mounted — it exposes nothing.
+#
+# Signing, push and pull need your 1Password SSH agent, which is OPT-IN via
+# DOCKER_SHIM_GIT=1 — forwarding the agent lets anything in the container
+# (a postinstall, a transitive `go get`) authenticate and sign AS YOU, which
+# is exactly the exposure the volume-$HOME default removes, so it stays off
+# unless asked for. On: the agent socket is forwarded at its literal path
+# (so ~/.ssh/config's IdentityAgent resolves), op-ssh-sign (macOS-only) is
+# swapped for ssh-keygen, and ~/.gitconfig + ~/.private + known_hosts are
+# mounted read-only for identity and host verification. The private key
+# never leaves 1Password. Needs git + ssh-keygen in the image (node:22 has
+# them; the -slim python/ruby images may not).
+git_params=('safe.directory=*')
+if [[ -n ${DOCKER_SHIM_GIT:-} && ${DOCKER_SHIM_GIT} != 0 ]]; then
+  _host_home=0; [[ ${DOCKER_SHIM_HOME:-} == host ]] && _host_home=1
+  # 1Password first, same reasoning as bin/claude-in-docker: the inherited
+  # SSH_AUTH_SOCK on macOS is the empty keychain agent.
+  one_p_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+  git_sock=""
+  if [[ -S $one_p_sock ]]; then git_sock=$one_p_sock
+  elif [[ -n ${SSH_AUTH_SOCK:-} && -S ${SSH_AUTH_SOCK} ]]; then git_sock=$SSH_AUTH_SOCK; fi
+  if [[ -n $git_sock ]]; then
+    (( _host_home )) || run+=(-v "$git_sock:$git_sock")
+    run+=(-e "SSH_AUTH_SOCK=$git_sock")
+    run+=(-e "GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new")
+    # Docker Desktop presents the forwarded socket as root:root 0660; join
+    # the root group so the host user (uid 501, not owner) can connect to it.
+    run+=(--group-add 0)
+    git_params+=('gpg.ssh.program=ssh-keygen')   # op-ssh-sign is a macOS binary
+  fi
+  if (( ! _host_home )); then
+    [[ -f $HOME/.gitconfig ]] && run+=(-v "$HOME/.gitconfig:$HOME/.gitconfig:ro")
+    [[ -d $HOME/.private   ]] && run+=(-v "$HOME/.private:$HOME/.private:ro")
+    [[ -f $HOME/.ssh/known_hosts ]] && run+=(-v "$HOME/.ssh/known_hosts:$HOME/.ssh/known_hosts:ro")
+    [[ -f $HOME/.config/git/allowed_signers ]] && \
+      run+=(-v "$HOME/.config/git/allowed_signers:$HOME/.config/git/allowed_signers:ro")
+  fi
+fi
+# git's quoted-list format: 'k=v' 'k2=v2'
+_gcp=""; for p in "${git_params[@]}"; do _gcp+="'$p' "; done
+run+=(-e "GIT_CONFIG_PARAMETERS=${_gcp% }")
+
 run+=(-w "$PWD" -e DOCKER_SHIM_INNER=1)
 for e in ${env[@]+"${env[@]}"}; do run+=(-e "$e"); done
 # `-e NAME` with no value makes docker copy it from our environment, so a

@@ -215,6 +215,37 @@ sops_probe() {
     return 0
 }
 
+# The .dockerignore baseline + build guard, and registry-login's standing.
+# No vault read (that needs approval), only local signals. Sets REG_* vars.
+# 0 = everything present, 1 = something to fix.
+registry_probe() {
+    REG_IGNORE="" REG_GUARD="" REG_LOGINS=""
+    local rc=0
+    [[ -f "$DOTFILES/docker/dockerignore" ]] \
+        && REG_IGNORE="ok" \
+        || { REG_IGNORE="missing docker/dockerignore template"; rc=1; }
+    # The build guard only fires once zsh/docker.zsh is in the plugin list.
+    if grep -q '^\s*"docker"' "$DOTFILES/.zshrc" 2>/dev/null; then
+        REG_GUARD="ok"
+    else
+        REG_GUARD="zsh/docker.zsh not sourced in .zshrc — build guard inactive"
+        rc=1
+    fi
+    # Registries docker already has cached creds for, via the credential
+    # helper. Zero isn't a failure — just a hint to run registry-login.
+    local store helper n=0
+    store="$(awk -F'"' '/"credsStore"/{print $4; exit}' "$HOME/.docker/config.json" 2>/dev/null)"
+    helper="docker-credential-${store:-desktop}"
+    if command -v "$helper" >/dev/null 2>&1; then
+        n="$("$helper" list 2>/dev/null | grep -c '://' || true)"
+        [[ "$n" -gt 0 ]] && REG_LOGINS="$n registry login(s) cached" \
+                         || REG_LOGINS="no registry logins — run: kuse <cluster> && registry-login"
+    else
+        REG_LOGINS="credential helper $helper not found"
+    fi
+    return $rc
+}
+
 # Ask for sudo once, up front, and hold the ticket for the whole run.
 # Without this the password prompt lands 4 minutes in, behind a wall of
 # brew output, and the install silently stalls waiting on it.
@@ -567,6 +598,13 @@ do_ssh() {
         todo "$SOPS_DETAIL"
     fi
 
+    if registry_probe; then
+        ok "docker build guard + .dockerignore ($REG_LOGINS)"
+    else
+        [[ $REG_IGNORE == ok ]] || todo "$REG_IGNORE"
+        [[ $REG_GUARD  == ok ]] || todo "$REG_GUARD"
+    fi
+
     # Not checkable from here — GitHub needs the key twice, under two
     # different headings, and nothing local can see either. `gh` is
     # denied in this repo on purpose, and we are not going to make a
@@ -806,6 +844,14 @@ check() {
             failed=1
         fi
         rm -f "$dlog"
+
+        if registry_probe; then
+            ok "build guard + .dockerignore template"
+            info "registry logins: $REG_LOGINS"
+        else
+            [[ $REG_IGNORE == ok ]] || { warn "$REG_IGNORE"; failed=1; }
+            [[ $REG_GUARD  == ok ]] || { warn "$REG_GUARD";  failed=1; }
+        fi
     fi
 
     step "Terminal font and theme"

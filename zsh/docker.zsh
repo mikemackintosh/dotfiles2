@@ -4,6 +4,7 @@
 # DOCKER_ALLOW_NO_IGNORE=1 or `command docker build …`.
 # Covers `docker build`, `docker buildx build`, `docker image build` — not
 # `compose build` or `buildx bake`, whose contexts live in YAML/HCL.
+# Guards your interactive shell only; scripts call the real docker binary.
 
 docker() {
     local -a rest=("$@")
@@ -16,18 +17,35 @@ docker() {
         command docker "${rest[@]}"; return
     fi
 
-    local ctx="${@[-1]}" file=""
-    while (( $# > 1 )); do
-        case "$1" in
-            -f|--file) file="$2"; shift 2; continue ;;
-            --file=*)  file="${1#--file=}" ;;
-            -f?*)      file="${1#-f}" ;;
+    # Find the context by consuming flags, so it's located regardless of
+    # position: `docker build -t x .` and `docker build . -t x` both work.
+    # The old "last arg" heuristic let `docker build . -t x` slip past.
+    local file="" a
+    local -a positionals
+    while (( $# )); do
+        a=$1
+        if   [[ $a == --file=* ]]; then file=${a#--file=}; shift; continue
+        elif [[ $a == -f?*     ]]; then file=${a#-f};      shift; continue
+        elif [[ $a == -f || $a == --file ]]; then file=$2; shift 2; continue
+        fi
+        case $a in
+            # value-taking flags consume the next arg (the `--flag=value`
+            # form falls through to the self-contained case below)
+            -t|--tag|--build-arg|--label|--target|--platform|--network|\
+            --cache-from|--cache-to|-o|--output|--secret|--ssh|--add-host|\
+            --allow|--attest|--build-context|--annotation|--iidfile|--call|\
+            --metadata-file|--no-cache-filter|--progress|--provenance|--sbom|\
+            --shm-size|--ulimit|--cgroup-parent|-m|--memory)
+                shift 2; continue ;;
+            --*=*|-*) shift; continue ;;   # self-contained long flag, or boolean
+            *) positionals+=$a; shift ;;
         esac
-        shift
     done
 
-    # stdin, git/http URLs and tarballs carry their own context.
-    if [[ $ctx == - || $ctx == *://* || $ctx == git@* || ! -d $ctx ]]; then
+    # docker build takes exactly one positional: the context.
+    local ctx=${positionals[-1]:-}
+    # No context, stdin, git/http URLs and tarballs carry their own context.
+    if [[ -z $ctx || $ctx == - || $ctx == *://* || $ctx == git@* || ! -d $ctx ]]; then
         command docker "${rest[@]}"; return
     fi
     [[ -n $file && $file != /* ]] && file="$PWD/$file"

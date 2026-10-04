@@ -549,9 +549,20 @@ on the host and the container sees nothing. List the names; the shim passes
 `-e NAME` without the value, so docker copies it from the environment and it
 never shows in `docker run`'s argv or `ps`.
 
+**git works inside the shim.** `safe.directory=*` is always set (Docker shows
+the mounted project as root-owned, which otherwise breaks every `go get` /
+git dep with "dubious ownership"). Push, pull and signing are opt-in with
+`DOCKER_SHIM_GIT=1`: the shim forwards your 1Password SSH agent (at its literal
+socket path, `--group-add 0` so the root-owned socket is reachable), swaps the
+macOS `op-ssh-sign` for `ssh-keygen`, and mounts `~/.gitconfig`, `~/.private`
+and `known_hosts` read-only. The private key never leaves 1Password. It's off
+by default because forwarding the agent lets anything in the container sign and
+push as you — enable it per-command when a build fetches private git deps.
+
 ```sh
 DOCKER_SHIM_MOUNTS=~/src/shared-lib npm run build   # extra RW mounts, colon-separated
 DOCKER_SHIM_ENV="DATABASE_URL API_KEY" npm start     # pass these host vars through, by name
+DOCKER_SHIM_GIT=1 go get ./...                       # forward 1Password agent for git
 DOCKER_SHIM_HOME=host npm …                          # old behaviour: all of $HOME, RW
 docker volume rm docker-shim-home                    # reset every shim cache
 ```

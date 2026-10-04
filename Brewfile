@@ -19,6 +19,7 @@ brew "dockutil"                  # used by bin/macos-defaults to rewrite the Doc
 brew "go"                        # githooks/pre-commit runs gofmt + go vet on staged .go
 brew "sops"                      # per-cluster secrets; key via SOPS_AGE_KEY_CMD (kuse)
 brew "age"                       # age-keygen for the sops-age-key 1Password field
+brew "helm"                      # kubernetes charts (k8s manifests under k8s/ in app repos)
 
 # zsh enhancements — .zshrc sources these from /opt/homebrew/share
 brew "zsh-autosuggestions"
