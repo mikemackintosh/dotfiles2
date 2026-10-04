@@ -320,6 +320,38 @@ Both `git-review` and `git-feature` use:
   + docker CLI + pnpm + `@anthropic-ai/claude-code`). Built lazily by
   `claude-in-docker` on first use; refresh it with `rebuild-images`.
 
+### `registry-login` — registry logins from the cluster's 1Password item
+
+```sh
+kuse certifly-prod && registry-login           # every registry on the active cluster's item
+registry-login certifly-prod                   # or name the cluster
+registry-login --check loves2splug/certifly-horizon   # + prove the Docker Hub login may push
+```
+
+Registry credentials are optional fields on the same `kube-*` item `kuse`
+uses; `kclusters sync` records which kinds are complete (`KUBE_REGISTRIES`) and
+warns about half-filled ones:
+
+| Kind        | Fields                                                  | Login                                            |
+|-------------|---------------------------------------------------------|--------------------------------------------------|
+| `dockerhub` | `docker_pat` (+ `docker_user`)                          | `docker.io`                                      |
+| `registry`  | `registry_host`, `registry_user`, `registry_token`      | any private registry (e.g. Launchpad's)          |
+| `ecr`       | `ecr_registry`, `aws_access_key_id`, `aws_secret_access_key` | `aws ecr get-login-password` in `amazon/aws-cli` |
+| `gcr`       | `gcr_host`, `gcr_json_key` (service-account JSON)       | `_json_key` on gcr.io / `*-docker.pkg.dev`       |
+
+Docker Hub falls back to `$DOCKERHUB_OP_ITEM` (default `Personal/docker-hub`,
+fields `username` and `token`) when there is no cluster or the cluster has no
+`docker_pat`; that item's `username` also stands in for a missing
+`docker_user`. A Docker Hub token needs **Read & Write** scope: a read-only one
+logs in fine and still fails every push with `insufficient_scope`, which is
+what `--check` catches by asking Docker Hub's token service what it grants.
+
+Secrets are piped from `op read` into `docker login --password-stdin`, and AWS
+keys reach the aws-cli container by name (`-e NAME`), so none are on any argv.
+`kuse` doesn't log in by itself: logins go to the macOS keychain, which every
+shell shares, so switching cluster in one tab would re-point every other tab's
+pushes. ECR logins expire after 12h.
+
 ### `dockerignore-init` — baseline `.dockerignore` for a build context
 
 ```sh
@@ -511,8 +543,15 @@ read-only, for private registries. Running from `$HOME` itself mounts nothing
 and says so. Tool logins (e.g. `codex-security login`) live in the volume, not
 your real home.
 
+**No host environment gets in** unless named in `DOCKER_SHIM_ENV`, so
+`sops exec-env secrets.enc.yaml 'npm start'` or `op run -- npm start` decrypts
+on the host and the container sees nothing. List the names; the shim passes
+`-e NAME` without the value, so docker copies it from the environment and it
+never shows in `docker run`'s argv or `ps`.
+
 ```sh
 DOCKER_SHIM_MOUNTS=~/src/shared-lib npm run build   # extra RW mounts, colon-separated
+DOCKER_SHIM_ENV="DATABASE_URL API_KEY" npm start     # pass these host vars through, by name
 DOCKER_SHIM_HOME=host npm …                          # old behaviour: all of $HOME, RW
 docker volume rm docker-shim-home                    # reset every shim cache
 ```
@@ -610,6 +649,26 @@ committed. It is Go (`cmd/kclusters`, stdlib only), built into
 `kuse` renders through `op inject` into a 0700 per-shell temp dir (0600 file)
 and points both `KUBECONFIG` and `k` at it. The file goes on `kuse -` or shell
 exit; dirs left by a killed shell are swept by the next `kuse`.
+
+**SOPS keys per cluster.** Give a cluster's `kube-*` item an optional
+`sops-age-key` field holding an age identity, and `kuse` points sops at it:
+
+```sh
+age-keygen                     # paste the whole output into the item's sops-age-key field
+kclusters sync                 # validates the field; marks the cluster in KUBE_SOPS
+kuse certifly-prod             # exports SOPS_AGE_KEY_CMD="op read op://<vault>/<item>/sops-age-key"
+sops exec-env secrets.enc.yaml 'npm start'      # secrets in env only, no plaintext file
+```
+
+The key is never on disk: sops (3.10+) runs `op read` each time it decrypts,
+behind 1Password's approval. `kclusters sync` checks the field for an
+`AGE-SECRET-KEY-1` line in-process and warns rather than wiring up a field that
+isn't one. Switching to a cluster without a key, or `kuse -`, clears
+`SOPS_AGE_KEY_CMD`; one you exported yourself survives a switch to a keyless
+cluster. Hand-kept `KUBE_CLUSTERS` entries don't get a SOPS key. Encrypt each
+repo's files to that cluster's public key (`# public key:` line from
+`age-keygen`) in its `.sops.yaml`. `install.sh --check` fails on sops older
+than 3.10, which silently ignores `SOPS_AGE_KEY_CMD`.
 
 A cluster with a different shape (exec auth for EKS/GKE, client certs) gets its
 own `~/.kube/<name>.tpl`, which wins over the repo template. Hand-kept entries

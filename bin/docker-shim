@@ -17,6 +17,8 @@
 # which holds the tool caches (~/.npm, ~/.cache, ~/.gem, …) between runs.
 # ~/.npmrc is mounted read-only for private registries.
 #
+# Pass host env by NAME:    DOCKER_SHIM_ENV="DATABASE_URL API_KEY" npm start
+#                           (nothing is inherited otherwise; values stay off argv)
 # Extra RW mounts:          DOCKER_SHIM_MOUNTS=~/src/lib:~/src/other npm …
 # Old whole-$HOME mount:    DOCKER_SHIM_HOME=host npm …
 #
@@ -225,6 +227,11 @@ else
 fi
 run+=(-w "$PWD" -e DOCKER_SHIM_INNER=1)
 for e in ${env[@]+"${env[@]}"}; do run+=(-e "$e"); done
+# `-e NAME` with no value makes docker copy it from our environment, so a
+# secret from `op run` / `sops exec-env` never appears in argv or `ps`.
+for n in ${DOCKER_SHIM_ENV:-}; do
+  [[ $n =~ ^[A-Za-z_][A-Za-z0-9_]*$ && -n ${!n+x} ]] && run+=(-e "$n")
+done
 run+=(--entrypoint "${cmd[0]}")
 
 # Lineage label — see _reap_shim_orphans above. Prefer container

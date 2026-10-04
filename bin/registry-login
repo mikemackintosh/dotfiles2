@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# registry-login — docker login to every registry a kuse cluster's 1Password item holds.
+#
+# Usage:
+#   registry-login [cluster]                    # default: the active kuse cluster ($KUBE_CLUSTER)
+#   registry-login --check NS/REPO [cluster]    # also prove the Docker Hub login may push there
+#
+# Examples:
+#   kuse certifly-prod && registry-login
+#   registry-login --check loves2splug/certifly-horizon certifly-prod
+#
+# Which registries a cluster has comes from KUBE_REGISTRIES in the map
+# `kclusters sync` writes; the credentials are fields on the same kube-* item:
+#   dockerhub  docker_pat (+ docker_user, else the fallback item's username)
+#   registry   registry_host, registry_user, registry_token   (any private registry)
+#   ecr        ecr_registry, aws_access_key_id, aws_secret_access_key
+#   gcr        gcr_host (gcr.io, us-docker.pkg.dev, …), gcr_json_key
+# No cluster, or one without docker_pat: Docker Hub falls back to
+# $DOCKERHUB_OP_ITEM (default Personal/docker-hub; fields username, token).
+#
+# Logins land in the macOS keychain, which every shell shares — that is why
+# kuse does not do this itself. ECR logins expire after 12h; rerun.
+# Secrets are piped from `op read` into `docker login --password-stdin`, or
+# reach the aws-cli container as env inherited by name; never argv.
+
+set -euo pipefail
+
+check=""
+cluster="${KUBE_CLUSTER:-}"
+while (( $# )); do
+    case "$1" in
+        --check) check="${2:?--check needs NS/REPO}"; shift 2 ;;
+        -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) echo "registry-login: unknown flag $1" >&2; exit 2 ;;
+        *) cluster="$1"; shift ;;
+    esac
+done
+
+command -v op >/dev/null 2>&1 || { echo "registry-login: 1Password CLI (op) not found" >&2; exit 127; }
+command -v docker >/dev/null 2>&1 || { echo "registry-login: docker not found" >&2; exit 127; }
+
+map="${KUBE_CLUSTERS_FILE:-$HOME/.private/kube-clusters.zsh}"
+fallback="${DOCKERHUB_OP_ITEM:-Personal/docker-hub}"
+
+# Print the second column of <name>'s line inside the <block>=( … ) block.
+map_get() {
+    [[ -r $map ]] || return 0
+    awk -v blk="$2=(" -v name="$1" '
+        $0 == blk { f = 1; next }
+        f && /^\)/ { f = 0 }
+        f && $1 == name { print $2; exit }' "$map"
+}
+
+ref="" kinds=""
+if [[ -n $cluster ]]; then
+    ref="$(map_get "$cluster" KUBE_SYNCED)"
+    [[ -n $ref ]] || { echo "registry-login: $cluster is not in $map — run: kclusters sync" >&2; exit 1; }
+    kinds="$(map_get "$cluster" KUBE_REGISTRIES)"
+    echo "cluster $cluster: ${kinds:-no registries}"
+fi
+[[ ,$kinds, == *,dockerhub,* ]] || kinds="${kinds:+$kinds,}dockerhub-fallback"
+
+failed=()
+hub_user="" hub_token_ref=""
+
+login_dockerhub() {
+    local src="$1"
+    if [[ $src == cluster ]]; then
+        hub_token_ref="op://$ref/docker_pat"
+        hub_user="$(op read "op://$ref/docker_user" 2>/dev/null || true)"
+        [[ -n $hub_user ]] || hub_user="$(op read "op://$fallback/username" 2>/dev/null || true)"
+        [[ -n $hub_user ]] || { echo "✗ dockerhub: no docker_user on $cluster and no username in $fallback" >&2; return 1; }
+    else
+        hub_user="$(op read "op://$fallback/username" 2>/dev/null || true)"
+        if [[ -z $hub_user ]]; then
+            echo "- dockerhub: skipped (no docker_pat on ${cluster:-a cluster}, and $fallback unreadable)"
+            return 0
+        fi
+        hub_token_ref="op://$fallback/token"
+    fi
+    op read "$hub_token_ref" | docker login --username "$hub_user" --password-stdin docker.io >/dev/null
+}
+
+login_registry() {
+    local host user
+    host="$(op read "op://$ref/registry_host")"
+    user="$(op read "op://$ref/registry_user")"
+    op read "op://$ref/registry_token" | docker login --username "$user" --password-stdin "$host" >/dev/null
+}
+
+login_ecr() {
+    local host region
+    host="$(op read "op://$ref/ecr_registry")"
+    region="${host#*.dkr.ecr.}"; region="${region%%.*}"
+    # aws-cli in a container (no native install); keys are exported into this
+    # subshell and passed with -e NAME, so docker copies them from the env.
+    (
+        AWS_ACCESS_KEY_ID="$(op read "op://$ref/aws_access_key_id")"
+        AWS_SECRET_ACCESS_KEY="$(op read "op://$ref/aws_secret_access_key")"
+        export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+        docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
+            "${ECR_CLI_IMAGE:-amazon/aws-cli:latest}" ecr get-login-password --region "$region"
+    ) | docker login --username AWS --password-stdin "$host" >/dev/null
+}
+
+login_gcr() {
+    local host
+    host="$(op read "op://$ref/gcr_host")"
+    op read "op://$ref/gcr_json_key" | docker login --username _json_key --password-stdin "https://$host" >/dev/null
+}
+
+IFS=, read -r -a todo <<<"$kinds"
+for k in "${todo[@]}"; do
+    case "$k" in
+        dockerhub)          label="dockerhub"; fn=(login_dockerhub cluster) ;;
+        dockerhub-fallback) label="dockerhub ($fallback)"; fn=(login_dockerhub fallback) ;;
+        registry|ecr|gcr)   label="$k"; fn=("login_$k") ;;
+        *) echo "? $k: unknown registry kind in $map" >&2; failed+=("$k"); continue ;;
+    esac
+    if "${fn[@]}"; then
+        [[ $k == dockerhub-fallback && -z $hub_token_ref ]] || echo "✓ $label"
+    else
+        echo "✗ $label: login failed" >&2
+        failed+=("$k")
+    fi
+done
+
+if [[ -n $check ]]; then
+    if [[ -z $hub_token_ref ]]; then
+        echo "✗ --check: no Docker Hub login to check" >&2
+        failed+=(check)
+    else
+        # The registry token is a JWT whose payload lists the actions granted.
+        resp="$(
+            { printf 'user = "%s:' "$hub_user"; op read --no-newline "$hub_token_ref"; printf '"\n'; } |
+                curl -fsS -K - "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$check:pull,push"
+        )" || resp=""
+        payload="$(jq -r '.token // empty' <<<"$resp" | cut -d. -f2 | tr '_-' '/+')"
+        while (( ${#payload} % 4 )); do payload+="="; done
+        granted="$(base64 -d <<<"$payload" 2>/dev/null | jq -r --arg r "$check" \
+            '[.access[]? | select(.name == $r) | .actions[]] | join(",")' 2>/dev/null || true)"
+        if [[ ,$granted, == *,push,* ]]; then
+            echo "✓ $hub_user may push to $check"
+        else
+            echo "✗ $hub_user may NOT push to $check (granted: ${granted:-nothing})" >&2
+            echo "  The token needs Read & Write scope, and $hub_user needs write access to ${check%%/*}." >&2
+            failed+=(check)
+        fi
+    fi
+fi
+
+(( ${#failed[@]} == 0 )) || { echo "registry-login: failed: ${failed[*]}" >&2; exit 1; }

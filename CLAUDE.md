@@ -41,7 +41,9 @@ bin/                                      → user scripts (on $PATH)
   pr-spin                                   back-compat symlink → git-feature
   claude-in-docker                          runs claude with narrow host mounts (safe --dangerously-*)
   kclusters                                 sync kube-* 1Password items into the
-                                            map `kuse` reads (Go, cmd/kclusters)
+                                            map `kuse` reads (Go, cmd/kclusters);
+                                            optional sops-age-key → KUBE_SOPS,
+                                            registry fields → KUBE_REGISTRIES
   codex-security                            npx codex-security + seccomp=unconfined (bwrap needs it)
   gen-compose-override                      randomizes docker-compose ports per PR/branch
   notify                                    osascript notification wrapper
@@ -53,6 +55,8 @@ bin/                                      → user scripts (on $PATH)
                                             (node/npm/pnpm/python3/ruby/…) symlink to it;
                                             npm/npx/yarn install scripts off by default;
                                             mounts only the project, $HOME is a volume
+  registry-login                            docker login to Docker Hub / private /
+                                            ECR / GCR from the kuse cluster's item
   dockerignore-init                         create/merge .dockerignore from
                                             docker/dockerignore
   rebuild-images                            rebuild docker/<name>/ → <name>:local
@@ -148,6 +152,12 @@ expected on machines that haven't run `brew bundle`.
   though auth succeeded. `ssh -T git@github.com` answering
   `Hi owner/repo!` instead of `Hi username!` is the tell; pin the
   account key per `ssh-config.example`.
+- SOPS keys are per cluster and never on disk: `kuse` sets
+  `SOPS_AGE_KEY_CMD` to `op read` the item's `sops-age-key`. Don't
+  reintroduce `SOPS_AGE_KEY_FILE`, and keep sops >= 3.10 — older
+  versions ignore `SOPS_AGE_KEY_CMD` and fail with "no identity matched".
+- The docker shims inherit no host env; secrets reach a container only
+  via `DOCKER_SHIM_ENV="NAME …"` (names, never values on argv).
 - `core.hooksPath = ~/.dotfiles/githooks` is global. If a repo
   needs its own hooks (rare), opt out with:
   `git config --local core.hooksPath .git/hooks`.

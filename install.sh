@@ -186,6 +186,35 @@ op_probe() {
 
 KUBE_MAP="$HOME/.private/kube-clusters.zsh"
 
+# kuse sets SOPS_AGE_KEY_CMD; sops before 3.10 ignores it and decryption
+# fails with "no identity matched" — far from the cause. Also reports how
+# many synced clusters carry a sops-age-key (optional, so 0 is fine).
+# 0 = ok, 1 = sops/age missing or too old.
+sops_probe() {
+    SOPS_DETAIL="" SOPS_CLUSTERS=""
+    if ! command -v sops >/dev/null 2>&1 || ! command -v age-keygen >/dev/null 2>&1; then
+        SOPS_DETAIL="sops/age missing — kuse cannot decrypt cluster secrets. Run: brew bundle --file=$BREWFILE"
+        return 1
+    fi
+    local v
+    v=$(sops --disable-version-check --version 2>/dev/null | awk '{print $2; exit}') || true
+    local major=${v%%.*} rest=${v#*.}
+    local minor=${rest%%.*}
+    if [[ ! $major =~ ^[0-9]+$ || ! $minor =~ ^[0-9]+$ ]] || (( major < 3 || (major == 3 && minor < 10) )); then
+        SOPS_DETAIL="sops ${v:-?} predates SOPS_AGE_KEY_CMD (3.10) — run: brew upgrade sops"
+        return 1
+    fi
+    SOPS_DETAIL="sops $v"
+    if [[ -f "$KUBE_MAP" ]]; then
+        if grep -q '^KUBE_SOPS=(' "$KUBE_MAP"; then
+            SOPS_CLUSTERS="$(awk '/^KUBE_SOPS=\(/{f=1;next} f&&/^\)/{f=0} f&&NF{n++} END{print n+0}' "$KUBE_MAP") cluster(s) with a sops-age-key"
+        else
+            SOPS_CLUSTERS="cluster map predates SOPS support — run: kclusters sync"
+        fi
+    fi
+    return 0
+}
+
 # Ask for sudo once, up front, and hold the ticket for the whole run.
 # Without this the password prompt lands 4 minutes in, behind a wall of
 # brew output, and the install silently stalls waiting on it.
@@ -532,6 +561,11 @@ do_ssh() {
     elif (( rc == 0 )); then
         todo "No kuse cluster map — run: kclusters sync"
     fi
+    if sops_probe; then
+        ok "$SOPS_DETAIL${SOPS_CLUSTERS:+ — $SOPS_CLUSTERS}"
+    else
+        todo "$SOPS_DETAIL"
+    fi
 
     # Not checkable from here — GitHub needs the key twice, under two
     # different headings, and nothing local can see either. `gh` is
@@ -726,7 +760,7 @@ check() {
         warn "no ~/.ssh/config — cp $DOTFILES/ssh-config.example ~/.ssh/config"; failed=1
     fi
 
-    step "1Password CLI + kuse"
+    step "1Password CLI + kuse + sops"
     local o_rc=0
     op_probe || o_rc=$?
     case "$o_rc" in
@@ -737,6 +771,11 @@ check() {
         ok "$KUBE_MAP"
     else
         warn "no kuse cluster map — run: kclusters sync"; failed=1
+    fi
+    if sops_probe; then
+        ok "$SOPS_DETAIL${SOPS_CLUSTERS:+ — $SOPS_CLUSTERS}"
+    else
+        warn "$SOPS_DETAIL"; failed=1
     fi
 
     step "Container runtime"

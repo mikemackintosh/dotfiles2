@@ -56,6 +56,8 @@ kconfig() {
   print "image:      $KUBE_IMAGE"
   print "kubeconfig: $KUBECONFIG_FILE$([[ -f $KUBECONFIG_FILE ]] || print ' (MISSING)')"
   print "namespace:  ${KUBE_NAMESPACE:-<context default>}"
+  print "sops key:   ${${SOPS_AGE_KEY_CMD:+$SOPS_AGE_KEY_CMD}:-<none>}"
+  [[ -n $KUBE_CLUSTER ]] && { _kube_load; print "registries: ${KUBE_REGISTRIES[$KUBE_CLUSTER]:-<none>} (registry-login)" }
   (( ${#KUBE_DOCKER_ARGS} ))  && print "docker args:  ${KUBE_DOCKER_ARGS[*]}"
   (( ${#KUBE_KUBECTL_ARGS} )) && print "kubectl args: ${KUBE_KUBECTL_ARGS[*]}"
   return 0
@@ -74,14 +76,21 @@ kconfig() {
 #   KUBE_CLUSTERS=(edge Infra/k8s-edge)
 # Value is a vault (item defaults to kube-<name>) or vault/item. Unlisted
 # names fall back to kube-<name> in $KUBE_OP_VAULT (default: Personal).
+#
+# SOPS: a synced item with a valid sops-age-key field (see KUBE_SOPS in the
+# map) gets SOPS_AGE_KEY_CMD="op read op://<vault>/<item>/sops-age-key", so
+# sops decrypts with that cluster's key and the key never touches disk.
+# Switching to a cluster without one, or `kuse -`, clears it.
 
 : ${KUBE_OP_VAULT:=Personal}
 : ${KUBE_TEMPLATE:=${0:A:h:h}/kube/config.tpl}
-typeset -gA KUBE_CLUSTERS KUBE_SYNCED
+# The map's arrays must be declared associative before it is sourced, or
+# its `NAME=(…)` lines make plain arrays.
+typeset -gA KUBE_CLUSTERS KUBE_SYNCED KUBE_SOPS KUBE_REGISTRIES
 : ${KUBE_CLUSTERS_FILE:=$HOME/.private/kube-clusters.zsh}
 
 # Reread on every use so a sync lands in shells that are already open.
-_kube_load() { [[ -r $KUBE_CLUSTERS_FILE ]] && source $KUBE_CLUSTERS_FILE }
+_kube_load() { KUBE_SOPS=() KUBE_REGISTRIES=(); [[ -r $KUBE_CLUSTERS_FILE ]] && source $KUBE_CLUSTERS_FILE }
 
 kuse() {
   local name=$1
@@ -95,6 +104,7 @@ kuse() {
   fi
   if [[ $name == - ]]; then
     _kube_forget
+    _kube_sops ""
     unset KUBECONFIG KUBE_CLUSTER
     KUBECONFIG_FILE=$HOME/dcs-pro1-kubeconfig.yaml
     return
@@ -137,6 +147,21 @@ kuse() {
 
   export KUBECONFIG=$out KUBE_CLUSTER=$name
   KUBECONFIG_FILE=$out
+  _kube_sops "${KUBE_SOPS[$name]}"
+}
+
+# _kube_sops <vaultID/itemID | ""> — point sops at that item's key, or drop
+# the one kuse set. A SOPS_AGE_KEY_CMD you exported yourself is left alone.
+_kube_sops() {
+  if [[ -n $_KUBE_SOPS_CMD && $SOPS_AGE_KEY_CMD == $_KUBE_SOPS_CMD ]]; then
+    unset SOPS_AGE_KEY_CMD
+  fi
+  unset _KUBE_SOPS_CMD
+  [[ -n $1 ]] || return 0
+  # sops splits this with shlex and execs it — no shell — and the IDs hold
+  # no spaces, so it needs no quoting.
+  _KUBE_SOPS_CMD="op read op://$1/sops-age-key"
+  export SOPS_AGE_KEY_CMD=$_KUBE_SOPS_CMD
 }
 
 # zshexit does not run when a shell is killed, so the next kuse clears dirs
