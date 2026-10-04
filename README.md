@@ -535,7 +535,7 @@ titled `kube-<something>` with fields `server`, `ca` (base64 CA data) and
 kclusters sync   # find kube-* items in every vault, write the map (-n: preview)
 kclusters        # list what is mapped (offline)
 kuse certifly-prod     # render + switch; tab-completes from the map
-kuse             # which cluster is active
+kuse             # fzf picker (active one marked; Esc keeps it)
 kuse -           # forget it, delete the file
 ```
 

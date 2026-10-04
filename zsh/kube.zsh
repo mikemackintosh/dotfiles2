@@ -64,7 +64,7 @@ kconfig() {
 # kuse — render a cluster's kubeconfig from 1Password into this shell only.
 #
 #   kuse prod      render, then point KUBECONFIG and `k` at it
-#   kuse           show the active cluster
+#   kuse           pick one with fzf (prints the active cluster without a tty)
 #   kuse -         forget it and delete the rendered file
 #
 # Template: ~/.kube/<name>.tpl if present, else kube/config.tpl in this repo.
@@ -86,8 +86,12 @@ _kube_load() { [[ -r $KUBE_CLUSTERS_FILE ]] && source $KUBE_CLUSTERS_FILE }
 kuse() {
   local name=$1
   if [[ -z $name ]]; then
-    print "${KUBE_CLUSTER:-<none>}${KUBECONFIG:+  ($KUBECONFIG)}"
-    return
+    if [[ ! -t 0 || ! -t 1 ]] || ! command -v fzf &>/dev/null; then
+      print "${KUBE_CLUSTER:-<none>}${KUBECONFIG:+  ($KUBECONFIG)}"
+      return
+    fi
+    name=$(_kube_pick) || return 0
+    [[ -n $name ]] || return 0
   fi
   if [[ $name == - ]]; then
     _kube_forget
@@ -145,6 +149,33 @@ _kube_sweep() {
     rm -f -- $d/*(DN)
     rmdir -- $d 2>/dev/null
   done
+}
+
+# One line per known cluster: name, then where it comes from. Synced
+# entries show the vault/item names kclusters left in its comments.
+_kube_pick() {
+  _kube_load
+  local -A from
+  local line n
+  if [[ -r $KUBE_CLUSTERS_FILE ]]; then
+    for line in ${(f)"$(<$KUBE_CLUSTERS_FILE)"}; do
+      [[ $line =~ '^ +([^ ]+) +[^ ]+ +# (.*)$' ]] && from[$match[1]]=$match[2]
+    done
+  fi
+  for n in ${(k)KUBE_CLUSTERS}; do from[$n]="${KUBE_CLUSTERS[$n]} (hand-kept)"; done
+  for n in $HOME/.kube/*.tpl(N:t:r); do from[$n]="~/.kube/$n.tpl"; done
+  (( ${#from} )) || { print -u2 "kuse: no clusters; run: kclusters sync"; return 1 }
+
+  local -a lines
+  for n in ${(ko)from}; do
+    lines+=("$(printf "%-24s %s%s" $n $from[$n] "${${(M)n:#$KUBE_CLUSTER}:+   ● active}")")
+  done
+  [[ -n $KUBE_CLUSTER ]] && lines+=("$(printf "%-24s %s" - "none: forget the active kubeconfig")")
+
+  local choice
+  choice=$(print -rl -- $lines | fzf --height=~40% --reverse --no-multi \
+    --prompt="kube> " --header="active: ${KUBE_CLUSTER:-none}") || return 1
+  print -r -- ${choice%% *}
 }
 
 _kube_forget() {
