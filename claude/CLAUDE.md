@@ -129,7 +129,9 @@ either. Do not "fix" that by installing node natively, by `--network host` (stil
 1. Navigate to `http://localhost:<port>` — **never `127.0.0.1`**. Inside that browser
    "localhost" is remapped to the Docker host gateway; an IP literal bypasses the remap.
    Vite's host check passes because the Host header is still `localhost`.
-2. `take_screenshot` with a `filePath` under `$HOME`; only `$HOME` and `$PWD` are mounted.
+2. `take_screenshot` with a `filePath` under `~/Desktop/screenshots` (a bare filename lands
+   there). That is the only writable host path; the project is mounted read-only and the
+   rest of `$HOME` not at all.
 3. A sign-in that bounces to a real IdP will not complete in there. Use the project's local
    stub login if it has one, or take the CDP route below and inject the session cookie.
    Never paste a production cookie into a screenshot session.

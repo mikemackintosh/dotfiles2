@@ -15,25 +15,47 @@
 #   claude mcp add --scope user chrome-devtools -- ~/.dotfiles/bin/chrome-devtools-mcp
 #
 # From an agent, navigate to http://localhost:<port> — NOT 127.0.0.1, an IP
-# literal bypasses the resolver rule. $HOME is mounted at the same path, so a
-# screenshot filePath under $HOME lands where it says.
+# literal bypasses the resolver rule.
+#
+# The MCP is `npx …@latest` with --allow-unrestricted-paths, so it gets no real
+# $HOME: only the screenshots dir (RW, also the working dir, so a relative
+# filePath lands there) and the project (git toplevel or $PWD, read-only, for
+# uploads). $HOME inside is the docker-shim-home volume, as for the shims.
 #
 # Env: CHROME_DEVTOOLS_MCP_IMAGE (default below; the tag pins the Chromium
-#      build), CHROME_DEVTOOLS_MCP_VIEWPORT (default 1440x900).
+#      build), CHROME_DEVTOOLS_MCP_VIEWPORT (default 1440x900),
+#      CHROME_DEVTOOLS_MCP_SCREENSHOTS (default ~/Desktop/screenshots).
 # Any extra arguments are passed through to chrome-devtools-mcp.
 set -euo pipefail
 
 IMAGE="${CHROME_DEVTOOLS_MCP_IMAGE:-mcr.microsoft.com/playwright:v1.62.1-noble}"
 VIEWPORT="${CHROME_DEVTOOLS_MCP_VIEWPORT:-1440x900}"
 
-run=(run --rm -i -u "$(id -u):$(id -g)" -v "$HOME:$HOME" -e HOME="$HOME")
-case "$PWD" in
-  "$HOME"|"$HOME"/*) : ;;
-  *) run+=(-v "$PWD:$PWD") ;;
+SHOTS="${CHROME_DEVTOOLS_MCP_SCREENSHOTS:-$HOME/Desktop/screenshots}"
+mkdir -p "$SHOTS"
+uid_gid="$(id -u):$(id -g)"
+
+# Same volume and nocopy init as bin/docker-shim — see the comment there.
+home_vol=docker-shim-home
+if ! docker volume inspect "$home_vol" >/dev/null 2>&1; then
+  docker volume create "$home_vol" >/dev/null
+  docker run --rm -u 0 --mount "type=volume,src=$home_vol,dst=/h,volume-nocopy" \
+    --entrypoint chown "$IMAGE" "$uid_gid" /h
+fi
+
+run=(run --rm -i -u "$uid_gid" -e HOME="$HOME")
+run+=(--mount "type=volume,src=$home_vol,dst=$HOME,volume-nocopy")
+run+=(-v "$SHOTS:$SHOTS")
+project="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -n $project ]] || project="$PWD"
+case "$project" in
+  /|"$HOME") : ;;                       # never hand the browser all of $HOME
+  "$SHOTS"|"$SHOTS"/*) : ;;
+  *) [[ $HOME == "$project"/* ]] || run+=(-v "$project:$project:ro") ;;
 esac
 # Same lineage label the shims use, so claude-clean / docker-shim reap it if
 # the parent dies without closing stdin.
-run+=(-w "$PWD" --label "com.claude-shim.parent-pid=$PPID" --entrypoint sh "$IMAGE")
+run+=(-w "$SHOTS" --label "com.claude-shim.parent-pid=$PPID" --entrypoint sh "$IMAGE")
 
 # The image's /bin/sh is dash: keep the inner script POSIX.
 exec docker "${run[@]}" -c '
@@ -42,7 +64,7 @@ exec docker "${run[@]}" -c '
   chrome=$(ls -d /ms-playwright/chromium-*/chrome-linux/chrome | head -n1)
   # --allow-unrestricted-paths: without it screenshots/snapshots may only be
   # written to the container'"'"'s /tmp, which nothing on the host can see. The
-  # container mounts only $HOME (and $PWD), so "unrestricted" is bounded there.
+  # only writable host path is the screenshots dir, so that is the bound.
   exec npx -y chrome-devtools-mcp@latest \
     --headless --isolated --no-usage-statistics --allow-unrestricted-paths \
     --executablePath "$chrome" \

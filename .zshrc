@@ -108,6 +108,7 @@ dot_plugins=(
     "grep"
     "keybind"
     "kube"
+    "docker"
     "private"
     "zupershell"
     "ssh-agent"

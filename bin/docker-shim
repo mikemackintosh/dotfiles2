@@ -9,10 +9,16 @@
 # install.sh creates the known set (node npm npx yarn pnpm corepack bun deno
 # python3 python pip3 pip uv uvx poetry ruby gem bundle bundler irb).
 #
-# The host $HOME is mounted at an IDENTICAL path and we run as the host user, so
-# resolved/emitted paths stay valid on the host (CocoaPods' Podfile relies on
-# this) and any files written into the project aren't root-owned. Tool caches
-# (~/.npm, ~/.cache, ~/.gem, …) live under $HOME, so they persist between runs.
+# Only the PROJECT is mounted — the git toplevel (plus a worktree's common .git),
+# else $PWD — at an IDENTICAL path, and we run as the host user, so resolved/
+# emitted paths stay valid on the host (CocoaPods' Podfile relies on this) and
+# written files aren't root-owned. The rest of $HOME (~/.ssh, ~/.private,
+# ~/.aws, …) is not visible: $HOME inside is the `docker-shim-home` volume,
+# which holds the tool caches (~/.npm, ~/.cache, ~/.gem, …) between runs.
+# ~/.npmrc is mounted read-only for private registries.
+#
+# Extra RW mounts:          DOCKER_SHIM_MOUNTS=~/src/lib:~/src/other npm …
+# Old whole-$HOME mount:    DOCKER_SHIM_HOME=host npm …
 #
 # Per-tool image override:  NODE_DOCKER_IMAGE=node:22 node …   (<NAME>_DOCKER_IMAGE)
 # Extra `docker run` args:  DOCKER_SHIM_ARGS='--network host' npm …
@@ -169,15 +175,54 @@ args_var="${name_uc}_DOCKER_ARGS"
 args_val="${!args_var:-}"
 [[ -n "$args_val" ]] && extra+=($args_val)
 
-# Mount $HOME at the same path. If $PWD is outside $HOME (e.g. /tmp), mount it
-# too so the working directory exists inside the container.
 run=(run --rm -i)
 [[ -t 0 && -t 1 ]] && run+=(-t)               # a TTY when interactive (REPLs)
-run+=(-u "$(id -u):$(id -g)" -v "$HOME:$HOME" -e HOME="$HOME")
-case "$PWD" in
-  "$HOME"|"$HOME"/*) : ;;
-  *) run+=(-v "$PWD:$PWD") ;;
-esac
+uid_gid="$(id -u):$(id -g)"
+run+=(-u "$uid_gid" -e HOME="$HOME")
+
+# $HOME or one of its ancestors as the "project" would hand all of $HOME back.
+_too_wide() { [[ $1 == / || $1 == "$HOME" || $HOME == "$1"/* ]]; }
+
+if [[ ${DOCKER_SHIM_HOME:-} == host ]]; then
+  run+=(-v "$HOME:$HOME")
+  case "$PWD" in
+    "$HOME"|"$HOME"/*) : ;;
+    *) run+=(-v "$PWD:$PWD") ;;
+  esac
+else
+  # A named volume, not a host dir: the shim also runs inside claude-in-docker,
+  # where a host path it can't mkdir would be auto-created root-owned.
+  # volume-nocopy: an empty volume's first mount otherwise takes the
+  # mountpoint's owner from the image (root), undoing the chown.
+  home_vol=docker-shim-home
+  if ! "$docker_bin" volume inspect "$home_vol" >/dev/null 2>&1; then
+    "$docker_bin" volume create "$home_vol" >/dev/null
+    "$docker_bin" run --rm -u 0 --mount "type=volume,src=$home_vol,dst=/h,volume-nocopy" \
+      --entrypoint chown "$image" "$uid_gid" /h
+  fi
+  run+=(--mount "type=volume,src=$home_vol,dst=$HOME,volume-nocopy")
+  [[ -f $HOME/.npmrc ]] && run+=(-v "$HOME/.npmrc:$HOME/.npmrc:ro")
+
+  project="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n $project ]] && _too_wide "$project" && project=""
+  [[ -n $project ]] || project="$PWD"
+  if _too_wide "$project"; then
+    echo "$self(shim): not mounting $project (it would expose \$HOME); the container sees an empty dir. Run from a project, or DOCKER_SHIM_HOME=host." >&2
+  else
+    run+=(-v "$project:$project")
+    common="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    case "$common" in
+      ""|"$project"/*) : ;;
+      *) _too_wide "$common" || run+=(-v "$common:$common") ;;
+    esac
+  fi
+  if [[ -n ${DOCKER_SHIM_MOUNTS:-} ]]; then
+    IFS=: read -r -a _extra_mounts <<< "$DOCKER_SHIM_MOUNTS"
+    for m in "${_extra_mounts[@]}"; do
+      [[ -d $m ]] && ! _too_wide "$m" && run+=(-v "$m:$m")
+    done
+  fi
+fi
 run+=(-w "$PWD" -e DOCKER_SHIM_INNER=1)
 for e in ${env[@]+"${env[@]}"}; do run+=(-e "$e"); done
 run+=(--entrypoint "${cmd[0]}")

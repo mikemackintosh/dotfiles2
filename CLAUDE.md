@@ -51,7 +51,10 @@ bin/                                      → user scripts (on $PATH)
   term-marks                                portable OSC 133 marks for remote hosts
   docker-shim                               multi-call Docker shim; tool names
                                             (node/npm/pnpm/python3/ruby/…) symlink to it;
-                                            npm/npx/yarn install scripts off by default
+                                            npm/npx/yarn install scripts off by default;
+                                            mounts only the project, $HOME is a volume
+  dockerignore-init                         create/merge .dockerignore from
+                                            docker/dockerignore
   rebuild-images                            rebuild docker/<name>/ → <name>:local
                                             (pulls base, re-resolves latest)
                                             + re-pulls the shim images
@@ -66,6 +69,7 @@ claude/                                   → Claude Code config
     security-review.md                        branded security-assessment report
 cmd/kclusters/                            → Go source for bin/kclusters (own go.mod)
 docker/                                   → Dockerfiles built by our tools
+  dockerignore                              baseline .dockerignore template
   claude-review/                            base image for claude-in-docker
 docs/                                     → per-tool deep-dive docs
   git-review.md, git-feature.md             ← start here to learn a tool
@@ -84,6 +88,8 @@ tmux/tmux.conf                            → tmux config
 vim/                                      → vimrc + vendored plugins
 zsh/                                      → plugin files sourced by .zshrc
   prompt.zsh, prompt-themes.zsh             prompt engine + themes/shapes
+  docker.zsh                                `docker build` refuses a context
+                                            with no .dockerignore
   kube.zsh                                  `k` — kubectl in Docker (+ `kconfig`,
                                             `kuse` per-cluster 1Password config)
   ssh-agent.zsh                             pins SSH_AUTH_SOCK to 1Password's

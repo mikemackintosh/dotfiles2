@@ -320,6 +320,24 @@ Both `git-review` and `git-feature` use:
   + docker CLI + pnpm + `@anthropic-ai/claude-code`). Built lazily by
   `claude-in-docker` on first use; refresh it with `rebuild-images`.
 
+### `dockerignore-init` — baseline `.dockerignore` for a build context
+
+```sh
+dockerignore-init           # $PWD: create from docker/dockerignore, or merge
+dockerignore-init ./api     # another context
+```
+
+Creates `.dockerignore` from `docker/dockerignore` (secrets, keys, `.git`,
+dependency dirs, editor junk), or appends just the missing patterns to an
+existing one. Patterns are `**/`-prefixed: unlike `.gitignore`, a bare
+`node_modules` in `.dockerignore` only matches at the context root.
+
+Docker has no global ignore file. `zsh/docker.zsh` covers that gap: it wraps
+`docker build` / `buildx build` / `image build` and refuses a local context
+with no `.dockerignore` (or `<Dockerfile>.dockerignore`). Bypass once with
+`DOCKER_ALLOW_NO_IGNORE=1 docker build …`. It doesn't see `compose build` or
+`buildx bake`, and it guards your interactive shell only, not scripts.
+
 ### `rebuild-images` — rebuild the images under `docker/`
 
 ```sh
@@ -478,12 +496,26 @@ shims forward every argument straight through, so they're drop-in replacements.
 ### Toolchain shims (`bin/docker-shim`)
 
 One multi-call script: each tool name is a symlink to `bin/docker-shim`, which
-dispatches by the name it was invoked as (`$0`) to a per-tool image. The host
-`$HOME` is mounted at an **identical path** and the container runs as the host
-user, so `require.resolve(...)` / emitted paths stay valid on the host (that's
-what lets CocoaPods `pod install`, Metro, the RN CLI work with no local Node)
-and written files aren't root-owned. Tool caches (`~/.npm`, `~/.cache`,
-`~/.gem`, …) live under `$HOME`, so they persist between runs.
+dispatches by the name it was invoked as (`$0`) to a per-tool image. Only the
+**project** is mounted (the git toplevel, plus a worktree's shared `.git`, else
+`$PWD`), at an **identical path**, and the container runs as the host user, so
+`require.resolve(...)` / emitted paths stay valid on the host (that's what lets
+CocoaPods `pod install`, Metro, the RN CLI work with no local Node) and written
+files aren't root-owned.
+
+**The rest of `$HOME` is not visible.** `$HOME` inside is the
+`docker-shim-home` volume, so a malicious dependency can't read `~/.ssh`,
+`~/.private` or cloud credentials. The volume also holds the tool caches
+(`~/.npm`, `~/.cache`, `~/.gem`, …) between runs. Only `~/.npmrc` is mounted,
+read-only, for private registries. Running from `$HOME` itself mounts nothing
+and says so. Tool logins (e.g. `codex-security login`) live in the volume, not
+your real home.
+
+```sh
+DOCKER_SHIM_MOUNTS=~/src/shared-lib npm run build   # extra RW mounts, colon-separated
+DOCKER_SHIM_HOME=host npm …                          # old behaviour: all of $HOME, RW
+docker volume rm docker-shim-home                    # reset every shim cache
+```
 
 ```sh
 node -v

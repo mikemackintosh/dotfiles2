@@ -1,0 +1,70 @@
+# Baseline .dockerignore — copied/merged into a project by `dockerignore-init`.
+# The whole build context is sent to the daemon and `COPY . .` bakes it into a
+# layer that outlives any later `rm`, so secrets come first. Pass credentials a
+# build needs with `--secret` instead of shipping the file.
+#
+# Unlike .gitignore, a bare pattern here matches only at the context root:
+# `node_modules` misses `web/node_modules`. Hence the `**/` prefixes.
+
+# --- secrets and credentials
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.sample
+!**/.env.template
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+**/id_rsa*
+**/id_ecdsa*
+**/id_ed25519*
+**/.npmrc
+**/.yarnrc.yml
+**/.pypirc
+**/.netrc
+**/.ssh
+**/.gnupg
+**/.aws
+**/.azure
+**/.kube
+**/.docker
+**/credentials.json
+**/service-account*.json
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform
+**/.private
+
+# --- version control
+.git
+.hg
+.svn
+
+# --- dependencies and caches (reinstall inside the image)
+**/node_modules
+**/.pnpm-store
+**/bower_components
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.tox
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.gradle
+**/.next
+**/.nuxt
+**/.turbo
+**/coverage
+
+# --- editor and OS junk
+**/.DS_Store
+**/Thumbs.db
+**/.idea
+**/.vscode
+**/*.swp
+**/*.log

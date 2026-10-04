@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# dockerignore-init — give a build context the baseline .dockerignore.
+#
+# Usage:
+#   dockerignore-init [dir]     # default: $PWD
+#
+# Examples:
+#   dockerignore-init           # new file from the template, or merge into an existing one
+#   dockerignore-init ./api
+#
+# No .dockerignore yet: copies docker/dockerignore in. One already there: appends
+# only the template's patterns it lacks, under a marker comment, and lists them.
+# Never removes or reorders a line, so re-running is a no-op.
+
+set -euo pipefail
+
+template="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)/docker/dockerignore"
+dir="${1:-$PWD}"
+[[ -d $dir ]] || { echo "dockerignore-init: $dir is not a directory" >&2; exit 2; }
+target="$dir/.dockerignore"
+
+if [[ ! -e $target ]]; then
+    cp "$template" "$target"
+    echo "created $target"
+    exit 0
+fi
+
+missing=()
+while IFS= read -r line; do
+    [[ -z $line || $line == \#* ]] && continue
+    grep -qxF -- "$line" "$target" || missing+=("$line")
+done < "$template"
+
+if (( ${#missing[@]} == 0 )); then
+    echo "$target already has every baseline pattern"
+    exit 0
+fi
+
+{
+    [[ -n $(tail -c1 "$target") ]] && echo
+    echo
+    echo "# --- baseline from ~/.dotfiles/docker/dockerignore"
+    printf '%s\n' "${missing[@]}"
+} >> "$target"
+echo "added ${#missing[@]} pattern(s) to $target:"
+printf '  %s\n' "${missing[@]}"
