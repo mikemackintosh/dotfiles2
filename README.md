@@ -524,32 +524,40 @@ Override per-machine in `zsh/private.zsh`, or per-repo with a direnv `.envrc`:
 | `KUBE_DOCKER_ARGS`  | *(array)*                        | extra `docker run` args          |
 | `KUBE_KUBECTL_ARGS` | *(array)*                        | extra kubectl args, prepended    |
 
-#### `kuse` — per-cluster kubeconfig from 1Password
+#### `kuse` + `kclusters` — per-cluster kubeconfig from 1Password
 
 `kube/config.tpl` is a kubeconfig whose every value is an `op://` reference, so
-the repo holds no endpoint, CA or token. `kuse prod` fills it from a
-1Password item with fields `server`, `ca` and `token` — by default `kube-prod`
-in `$KUBE_OP_VAULT` (`Personal`), or wherever `KUBE_CLUSTERS` says — writes it 0600 into a per-shell temp
-dir, and points both `KUBECONFIG` and `k` at it. The file is deleted on
-`kuse -` or when the shell exits.
+the repo holds no endpoint, CA or token. Each cluster is a 1Password item
+titled `kube-<something>` with fields `server`, `ca` (base64 CA data) and
+`token`, in whichever vault it belongs to.
 
 ```sh
-kuse prod        # render + switch
+kclusters sync   # find kube-* items in every vault, write the map (-n: preview)
+kclusters        # list what is mapped (offline)
+kuse certifly-prod     # render + switch; tab-completes from the map
 kuse             # which cluster is active
 kuse -           # forget it, delete the file
 ```
 
-A cluster with a different shape (exec auth for EKS/GKE, client certs) gets
-its own `~/.kube/<name>.tpl`, which wins over the repo template. Cluster names and
-vaults stay private in `~/.private/kube.zsh`; the keys also drive tab completion:
+`kclusters sync` names each cluster `<vault>-<item minus kube->` (so
+`kube-prod` in *Danger Close* is `danger-close-prod`), skips items missing a
+field, and writes `~/.private/kube-clusters.zsh` (0600) keyed by vault and item
+**ID** — so spaces in vault names don't matter and nothing identifying is
+committed. It is Go (`cmd/kclusters`, stdlib only), built into
+`~/.cache/dotfiles/` on first run and whenever the source changes.
+
+`kuse` renders through `op inject` into a 0700 per-shell temp dir (0600 file)
+and points both `KUBECONFIG` and `k` at it. The file goes on `kuse -` or shell
+exit; dirs left by a killed shell are swept by the next `kuse`.
+
+A cluster with a different shape (exec auth for EKS/GKE, client certs) gets its
+own `~/.kube/<name>.tpl`, which wins over the repo template. Hand-kept entries
+in `~/.private/kube.zsh` win over synced ones; the value is a vault (item
+defaults to `kube-<name>`) or `vault/item`:
 
 ```zsh
-KUBE_CLUSTERS=(
-  prod-us   Ops              # vault; item defaults to kube-prod-us
-  prod-eu   Ops-EU
-  edge      Infra/k8s-edge   # vault/item
-)
-alias kprod='kuse prod-us'
+KUBE_CLUSTERS=(edge Infra/k8s-edge)
+alias kprod='kuse certifly-prod'
 ```
 
 ## Prompt

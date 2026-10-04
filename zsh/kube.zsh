@@ -67,14 +67,20 @@ kconfig() {
 #   kuse -         forget it and delete the rendered file
 #
 # Template: ~/.kube/<name>.tpl if present, else kube/config.tpl in this repo.
-# Where each cluster lives belongs in ~/.private/*.zsh, not here:
-#   KUBE_CLUSTERS=(prod-us Ops  prod-eu Ops-EU  edge Infra/k8s-edge)
+# Where each cluster lives comes from `kclusters sync`, which writes
+# $KUBE_CLUSTERS_FILE (KUBE_SYNCED, by vault/item ID). Hand-kept entries go
+# in ~/.private/*.zsh and win over synced ones:
+#   KUBE_CLUSTERS=(edge Infra/k8s-edge)
 # Value is a vault (item defaults to kube-<name>) or vault/item. Unlisted
 # names fall back to kube-<name> in $KUBE_OP_VAULT (default: Personal).
 
 : ${KUBE_OP_VAULT:=Personal}
 : ${KUBE_TEMPLATE:=${0:A:h:h}/kube/config.tpl}
-typeset -gA KUBE_CLUSTERS
+typeset -gA KUBE_CLUSTERS KUBE_SYNCED
+: ${KUBE_CLUSTERS_FILE:=$HOME/.private/kube-clusters.zsh}
+
+# Reread on every use so a sync lands in shells that are already open.
+_kube_load() { [[ -r $KUBE_CLUSTERS_FILE ]] && source $KUBE_CLUSTERS_FILE }
 
 kuse() {
   local name=$1
@@ -93,7 +99,8 @@ kuse() {
     return 127
   fi
 
-  local ref=${KUBE_CLUSTERS[$name]:-$KUBE_OP_VAULT}
+  _kube_load
+  local ref=${KUBE_CLUSTERS[$name]:-${KUBE_SYNCED[$name]:-$KUBE_OP_VAULT}}
   local vault=${ref%%/*} item=kube-$name
   [[ $ref == */* ]] && item=${ref#*/}
 
@@ -105,7 +112,8 @@ kuse() {
   # shell or leak into a sibling one. $TMPDIR is under /var/folders, which
   # Docker Desktop shares by default, so `k` can still mount the file.
   if [[ ! -d $_KUBE_DIR ]]; then
-    _KUBE_DIR=$(mktemp -d "${${TMPDIR:-/tmp}%/}/kube.XXXXXX") || return
+    _kube_sweep
+    _KUBE_DIR=$(mktemp -d "${${TMPDIR:-/tmp}%/}/kube.$$.XXXXXX") || return
   fi
   local out=$_KUBE_DIR/$name.yaml in=$_KUBE_DIR/.$name.tpl body rc=0
   body=$(<$tpl) || return
@@ -126,6 +134,18 @@ kuse() {
   KUBECONFIG_FILE=$out
 }
 
+# zshexit does not run when a shell is killed, so the next kuse clears dirs
+# whose owning shell (the pid in the name) is gone.
+_kube_sweep() {
+  local d pid
+  for d in ${${TMPDIR:-/tmp}%/}/kube.<->.*(N/); do
+    pid=${${d:t}#kube.}; pid=${pid%%.*}
+    kill -0 $pid 2>/dev/null && continue
+    rm -f -- $d/*(DN)
+    rmdir -- $d 2>/dev/null
+  done
+}
+
 _kube_forget() {
   [[ -d $_KUBE_DIR ]] || return 0
   rm -f -- $_KUBE_DIR/*.yaml(N)
@@ -138,7 +158,8 @@ add-zsh-hook zshexit _kube_forget
 
 _kuse() {
   local -a names
-  names=(${(k)KUBE_CLUSTERS} $HOME/.kube/*.tpl(N:t:r))
+  _kube_load
+  names=(${(k)KUBE_CLUSTERS} ${(k)KUBE_SYNCED} $HOME/.kube/*.tpl(N:t:r))
   compadd -- - ${(u)names}
 }
 (( $+functions[compdef] )) && compdef _kuse kuse

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# kclusters — sync the 1Password kubeconfig map that `kuse` reads.
+#
+# Usage:
+#   kclusters            list synced clusters (no 1Password call)
+#   kclusters sync [-n]  find kube-* items in every vault, rewrite the map
+#
+# Example: kclusters sync && kuse certifly-prod
+#
+# Source is cmd/kclusters (stdlib Go); built on first run and whenever it
+# changes, into the user cache rather than the repo.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")/../cmd/kclusters" && pwd)"
+bin="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/kclusters"
+
+if [[ ! -x $bin || -n $(find "$src" -newer "$bin" -type f -print -quit) ]]; then
+    mkdir -p "$(dirname "$bin")"
+    (cd "$src" && go build -o "$bin" .)
+fi
+exec "$bin" "$@"

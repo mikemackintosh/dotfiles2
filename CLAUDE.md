@@ -40,6 +40,8 @@ bin/                                      → user scripts (on $PATH)
                                             per machine (agent.toml) or per repo path
   pr-spin                                   back-compat symlink → git-feature
   claude-in-docker                          runs claude with narrow host mounts (safe --dangerously-*)
+  kclusters                                 sync kube-* 1Password items into the
+                                            map `kuse` reads (Go, cmd/kclusters)
   codex-security                            npx codex-security + seccomp=unconfined (bwrap needs it)
   gen-compose-override                      randomizes docker-compose ports per PR/branch
   notify                                    osascript notification wrapper
@@ -58,6 +60,7 @@ claude/                                   → Claude Code config
                                             PreToolUse Bash gate (see below)
   prompts/                                  workflow prompt templates
     security-review.md                        branded security-assessment report
+cmd/kclusters/                            → Go source for bin/kclusters (own go.mod)
 docker/                                   → Dockerfiles built by our tools
   claude-review/                            base image for claude-in-docker
 docs/                                     → per-tool deep-dive docs
