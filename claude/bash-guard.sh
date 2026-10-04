@@ -50,6 +50,12 @@ if grep -Eq '\|[^|]+&&' <<<"$bare" &&
   decide deny "A pipeline reports its LAST stage, so a grep/head after the real command masks its exit status and the && still fires — that is how a commit landed on a red test suite. Run the command on its own line and check \$? (cmd > /tmp/out 2>&1; echo \$?), or set -o pipefail."
 fi
 
+# Unsigned commits. `git commit` is allowed without a prompt only because commit.gpgsign=true
+# signs it; turning signing off per-command would quietly ride that allow rule.
+if grep -Eq '(^|[;&|]|\s)git\s[^;&|]*(--no-gpg-sign\b|commit\.gpgsign=(false|0|no|off)\b)' <<<"$bare"; then
+  decide deny "Commits must be signed (commit.gpgsign=true). If signing fails, fix the signer (see bin/git-ssh-sign) rather than skipping it; if you truly need an unsigned commit, say so and run it yourself."
+fi
+
 # ── Sometimes right, never reflexive ───────────────────────────────────────────────────
 
 if grep -Eq '(^|[;&|]|\s)git\s+reset\s+(--hard|--merge|--keep)\b' <<<"$bare"; then

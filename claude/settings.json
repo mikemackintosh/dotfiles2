@@ -41,9 +41,17 @@
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
   "agentPushNotifEnabled": true,
-  "deny": [
-    "Bash(gh)",
-    "Bash(gh *)"
-  ],
-  "tui": "fullscreen"
+  "tui": "fullscreen",
+  "permissions": {
+    "allow": [
+      "Bash(git commit)",
+      "Bash(git commit *)",
+      "Bash(git push)",
+      "Bash(git push *)"
+    ],
+    "deny": [
+      "Bash(gh)",
+      "Bash(gh *)"
+    ]
+  }
 }
