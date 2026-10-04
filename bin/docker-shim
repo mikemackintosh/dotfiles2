@@ -281,9 +281,30 @@ if [[ -n ${DOCKER_SHIM_GIT:-} && ${DOCKER_SHIM_GIT} != 0 ]]; then
   if (( ! _host_home )); then
     [[ -f $HOME/.gitconfig ]] && run+=(-v "$HOME/.gitconfig:$HOME/.gitconfig:ro")
     [[ -d $HOME/.private   ]] && run+=(-v "$HOME/.private:$HOME/.private:ro")
-    [[ -f $HOME/.ssh/known_hosts ]] && run+=(-v "$HOME/.ssh/known_hosts:$HOME/.ssh/known_hosts:ro")
     [[ -f $HOME/.config/git/allowed_signers ]] && \
       run+=(-v "$HOME/.config/git/allowed_signers:$HOME/.config/git/allowed_signers:ro")
+    # Stage ~/.ssh: config + known_hosts + the public keys the config pins
+    # via IdentityFile. The config's `IdentitiesOnly yes / IdentityFile
+    # …account.pub` is what stops a read-only deploy key (earlier in the
+    # agent) from winning the offer and answering `Hi owner/repo!` instead
+    # of `Hi you!`. Private keys stay out — keys come from the agent.
+    if [[ -d $HOME/.ssh ]]; then
+      _ssh_stage="${TMPDIR:-/tmp}/docker-shim.ssh.$_uid"
+      rm -rf "$_ssh_stage"; mkdir -m 700 "$_ssh_stage"
+      for _f in config known_hosts; do
+        [[ -f $HOME/.ssh/$_f ]] && cp -p "$HOME/.ssh/$_f" "$_ssh_stage/$_f"
+      done
+      [[ -d $HOME/.ssh/known_hosts.d ]] && cp -pR "$HOME/.ssh/known_hosts.d" "$_ssh_stage/"
+      if [[ -f $_ssh_stage/config ]]; then
+        awk 'tolower($1)=="identityfile"{print $2}' "$_ssh_stage/config" | while read -r _id; do
+          _id="${_id/#\~/$HOME}"
+          [[ -f $_id && $_id == *.pub ]] && cp -p "$_id" "$_ssh_stage/"
+        done
+        chmod 600 "$_ssh_stage/config"
+      fi
+      [[ -f $_ssh_stage/known_hosts ]] && chmod 644 "$_ssh_stage/known_hosts"
+      run+=(-v "$_ssh_stage:$HOME/.ssh:ro")
+    fi
   fi
 fi
 # git's quoted-list format: 'k=v' 'k2=v2'
