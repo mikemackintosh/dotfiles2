@@ -245,6 +245,24 @@ fi
 git_params=('safe.directory=*')
 if [[ -n ${DOCKER_SHIM_GIT:-} && ${DOCKER_SHIM_GIT} != 0 ]]; then
   _host_home=0; [[ ${DOCKER_SHIM_HOME:-} == host ]] && _host_home=1
+  # ssh (and git over it) calls getpwuid for our uid; the image's passwd DB
+  # doesn't know uid 501, so it dies with "No user exists for uid 501".
+  # Synthesize a passwd/group with our entry (fixed path keyed by uid, so
+  # repeat runs don't pile up temp files). Same shape as bin/claude-in-docker.
+  _uid="$(id -u)" _gid="$(id -g)"
+  _pw="${TMPDIR:-/tmp}/docker-shim.passwd.$_uid"
+  _gr="${TMPDIR:-/tmp}/docker-shim.group.$_uid"
+  {
+    echo "root:x:0:0:root:/root:/bin/sh"
+    echo "${USER:-user}:x:$_uid:$_gid:${USER:-user}:$HOME:/bin/sh"
+    echo "nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin"
+  } > "$_pw"
+  {
+    echo "root:x:0:"
+    echo "${USER:-user}:x:$_gid:"
+    echo "nobody:x:65534:"
+  } > "$_gr"
+  run+=(-v "$_pw:/etc/passwd:ro" -v "$_gr:/etc/group:ro")
   # 1Password first, same reasoning as bin/claude-in-docker: the inherited
   # SSH_AUTH_SOCK on macOS is the empty keychain agent.
   one_p_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
