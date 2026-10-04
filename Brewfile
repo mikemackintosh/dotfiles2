@@ -33,6 +33,8 @@ brew "mas"
 cask "iterm2"        unless File.exist?("/Applications/iTerm.app")
 cask "google-chrome" unless File.exist?("/Applications/Google Chrome.app")
 cask "1password"     unless File.exist?("/Applications/1Password.app")
+cask "1password-cli"                 # `op` — kuse and kclusters (zsh/kube.zsh)
+cask "visual-studio-code" unless File.exist?("/Applications/Visual Studio Code.app")
 # Cask artifact is version-numbered, so the guard names Alfred 5.app.
 cask "alfred"        unless File.exist?("/Applications/Alfred 5.app")
 cask "docker-desktop" unless File.exist?("/Applications/Docker.app")

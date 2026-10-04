@@ -162,6 +162,30 @@ sign_probe() {
     return $rc
 }
 
+# Can `op` reach the 1Password app? kuse and kclusters need it. `op account
+# list` answers from the app integration without an approval prompt; a real
+# read (`op vault list`) would block on one, which hangs an unattended run.
+# 0 = integrated, 1 = no op, 2 = op but the app integration is off.
+op_probe() {
+    OP_DETAIL=""
+    if ! command -v op >/dev/null 2>&1; then
+        OP_DETAIL="1Password CLI (op) missing — kuse and kclusters exit 127. Run: brew bundle --file=$BREWFILE"
+        return 1
+    fi
+    local log="${TMPDIR:-/tmp}/dotfiles-op.$$" n=0
+    op account list >"$log" 2>&1 || true
+    n=$(grep -c "@" "$log" || true)
+    rm -f "$log"
+    if (( n == 0 )); then
+        OP_DETAIL="op sees no account — turn on 1Password → Settings → Developer → Integrate with 1Password CLI"
+        return 2
+    fi
+    OP_DETAIL="$n account(s)"
+    return 0
+}
+
+KUBE_MAP="$HOME/.private/kube-clusters.zsh"
+
 # Ask for sudo once, up front, and hold the ticket for the whole run.
 # Without this the password prompt lands 4 minutes in, behind a wall of
 # brew output, and the install silently stalls waiting on it.
@@ -490,6 +514,20 @@ do_ssh() {
         *) todo "Commits cannot be signed: $SIGN_DETAIL" ;;
     esac
 
+    rc=0
+    op_probe || rc=$?
+    case "$rc" in
+        0) ok "1Password CLI integrated ($OP_DETAIL)" ;;
+        *) todo "$OP_DETAIL" ;;
+    esac
+    # Private and per-machine, so it never arrives with the repo. Not run
+    # from here: it reads every vault, which wants your approval.
+    if [[ -f "$KUBE_MAP" ]]; then
+        ok "kuse cluster map"
+    elif (( rc == 0 )); then
+        todo "No kuse cluster map — run: kclusters sync"
+    fi
+
     # Not checkable from here — GitHub needs the key twice, under two
     # different headings, and nothing local can see either. `gh` is
     # denied in this repo on purpose, and we are not going to make a
@@ -677,6 +715,19 @@ check() {
         warn "no ~/.ssh/config — cp $DOTFILES/ssh-config.example ~/.ssh/config"; failed=1
     fi
 
+    step "1Password CLI + kuse"
+    local o_rc=0
+    op_probe || o_rc=$?
+    case "$o_rc" in
+        0) ok "op integrated ($OP_DETAIL)" ;;
+        *) warn "$OP_DETAIL"; failed=1 ;;
+    esac
+    if [[ -f "$KUBE_MAP" ]]; then
+        ok "$KUBE_MAP"
+    else
+        warn "no kuse cluster map — run: kclusters sync"; failed=1
+    fi
+
     step "Container runtime"
     # Half of bin/ is containerized: claude-in-docker, git-review, git-feature,
     # codex-security, chrome-devtools-mcp, kube.zsh and every docker-shim alias
@@ -731,7 +782,7 @@ check() {
 
     step "Apps"
     local app
-    for app in "iTerm" "Google Chrome" "1Password" "Alfred 5"; do
+    for app in "iTerm" "Google Chrome" "1Password" "Alfred 5" "Visual Studio Code"; do
         [[ -d "/Applications/$app.app" ]] && ok "$app.app" \
             || { warn "/Applications/$app.app missing"; failed=1; }
     done

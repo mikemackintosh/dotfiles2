@@ -76,6 +76,11 @@ step is useless until the one above it is true:
 7. **Open a new terminal.** `zsh/ssh-agent.zsh` only pins `SSH_AUTH_SOCK` for
    shells started after the install; the one you ran the installer in still
    has macOS's empty agent.
+8. **For `kuse`: turn on 1Password → Settings → Developer → *Integrate with
+   1Password CLI*, then run `kclusters sync`.** The cluster map lives in
+   `~/.private` and is per-machine, so it never arrives with the repo; the
+   sync reads your vaults and wants an approval, so the installer leaves it
+   to you. Rerun it whenever you add a `kube-*` item.
 
 Then Full Disk Access and the logout for the macOS prefs, both of which
 `install.sh` will have already listed for you.
