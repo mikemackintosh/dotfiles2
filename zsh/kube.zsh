@@ -52,9 +52,89 @@ k() {
 
 # Show the effective config `k` will use.
 kconfig() {
+  print "cluster:    ${KUBE_CLUSTER:-<none>} (kuse)"
   print "image:      $KUBE_IMAGE"
   print "kubeconfig: $KUBECONFIG_FILE$([[ -f $KUBECONFIG_FILE ]] || print ' (MISSING)')"
   print "namespace:  ${KUBE_NAMESPACE:-<context default>}"
   (( ${#KUBE_DOCKER_ARGS} ))  && print "docker args:  ${KUBE_DOCKER_ARGS[*]}"
   (( ${#KUBE_KUBECTL_ARGS} )) && print "kubectl args: ${KUBE_KUBECTL_ARGS[*]}"
 }
+
+# kuse — render a cluster's kubeconfig from 1Password into this shell only.
+#
+#   kuse prod      render, then point KUBECONFIG and `k` at it
+#   kuse           show the active cluster
+#   kuse -         forget it and delete the rendered file
+#
+# Template: ~/.kube/<name>.tpl if present, else kube/config.tpl in this repo.
+# Cluster names for completion and aliases belong in ~/.private/*.zsh, e.g.
+#   KUBE_CLUSTERS=(prod staging); alias kprod='kuse prod'
+#
+#   KUBE_OP_VAULT   1Password vault holding the kube-<name> items (default: Personal)
+
+: ${KUBE_OP_VAULT:=Personal}
+: ${KUBE_TEMPLATE:=${0:A:h:h}/kube/config.tpl}
+typeset -ga KUBE_CLUSTERS
+
+kuse() {
+  local name=$1
+  if [[ -z $name ]]; then
+    print "${KUBE_CLUSTER:-<none>}${KUBECONFIG:+  ($KUBECONFIG)}"
+    return
+  fi
+  if [[ $name == - ]]; then
+    _kube_forget
+    unset KUBECONFIG KUBE_CLUSTER
+    KUBECONFIG_FILE=$HOME/dcs-pro1-kubeconfig.yaml
+    return
+  fi
+  if ! command -v op &>/dev/null; then
+    print -u2 "kuse: 1Password CLI (op) not found"
+    return 127
+  fi
+
+  local tpl=$HOME/.kube/$name.tpl
+  [[ -f $tpl ]] || tpl=$KUBE_TEMPLATE
+  [[ -f $tpl ]] || { print -u2 "kuse: no template: $tpl"; return 1 }
+
+  # One 0700 dir per shell, removed on exit, so tokens never outlive the
+  # shell or leak into a sibling one. $TMPDIR is under /var/folders, which
+  # Docker Desktop shares by default, so `k` can still mount the file.
+  if [[ ! -d $_KUBE_DIR ]]; then
+    _KUBE_DIR=$(mktemp -d "${${TMPDIR:-/tmp}%/}/kube.XXXXXX") || return
+  fi
+  local out=$_KUBE_DIR/$name.yaml in=$_KUBE_DIR/.$name.tpl body rc=0
+  body=$(<$tpl) || return
+  # __NAME__ is filled in before op runs, so secrets never pass through zsh.
+  # op wants -i or a pipe; it reads a here-string as empty stdin.
+  print -r -- "${body//__NAME__/$name}" >| $in || return
+  ( umask 077
+    KUBE_OP_VAULT=$KUBE_OP_VAULT KUBE_OP_ITEM=kube-$name \
+      op inject -f -i "$in" -o "$out" >/dev/null ) || rc=$?
+  rm -f -- "$in"
+  if (( rc )); then
+    rm -f -- "$out"
+    print -u2 "kuse: op inject failed for $KUBE_OP_VAULT/kube-$name"
+    return 1
+  fi
+
+  export KUBECONFIG=$out KUBE_CLUSTER=$name
+  KUBECONFIG_FILE=$out
+}
+
+_kube_forget() {
+  [[ -d $_KUBE_DIR ]] || return 0
+  rm -f -- $_KUBE_DIR/*.yaml(N)
+  rmdir -- $_KUBE_DIR 2>/dev/null
+  unset _KUBE_DIR
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook zshexit _kube_forget
+
+_kuse() {
+  local -a names
+  names=(${KUBE_CLUSTERS[@]} $HOME/.kube/*.tpl(N:t:r))
+  compadd -- - ${(u)names}
+}
+(( $+functions[compdef] )) && compdef _kuse kuse

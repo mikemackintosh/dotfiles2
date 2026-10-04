@@ -71,11 +71,14 @@ ssh-config.example                        → template for ~/.ssh/config
 install.sh                                → idempotent symlink installer;
                                             `--check` audits state
 iterms/                                   → iTerm2 color themes
+kube/config.tpl                           → kubeconfig template, all op:// refs
+                                            (rendered per shell by `kuse`)
 tmux/tmux.conf                            → tmux config
 vim/                                      → vimrc + vendored plugins
 zsh/                                      → plugin files sourced by .zshrc
   prompt.zsh, prompt-themes.zsh             prompt engine + themes/shapes
-  kube.zsh                                  `k` — kubectl in Docker (+ `kconfig`)
+  kube.zsh                                  `k` — kubectl in Docker (+ `kconfig`,
+                                            `kuse` per-cluster 1Password config)
   ssh-agent.zsh                             pins SSH_AUTH_SOCK to 1Password's
                                             agent (macOS ships an empty one)
   term-integration.zsh                      OSC 133 marks, OSC 7 cwd, DEC 2026

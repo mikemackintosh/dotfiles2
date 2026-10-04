@@ -524,6 +524,26 @@ Override per-machine in `zsh/private.zsh`, or per-repo with a direnv `.envrc`:
 | `KUBE_DOCKER_ARGS`  | *(array)*                        | extra `docker run` args          |
 | `KUBE_KUBECTL_ARGS` | *(array)*                        | extra kubectl args, prepended    |
 
+#### `kuse` — per-cluster kubeconfig from 1Password
+
+`kube/config.tpl` is a kubeconfig whose every value is an `op://` reference, so
+the repo holds no endpoint, CA or token. `kuse prod` fills it from the
+1Password item `kube-prod` (fields `server`, `ca`, `token`) in
+`$KUBE_OP_VAULT` (default `Personal`), writes it 0600 into a per-shell temp
+dir, and points both `KUBECONFIG` and `k` at it. The file is deleted on
+`kuse -` or when the shell exits.
+
+```sh
+kuse prod        # render + switch
+kuse             # which cluster is active
+kuse -           # forget it, delete the file
+```
+
+A cluster with a different shape (exec auth for EKS/GKE, client certs) gets
+its own `~/.kube/<name>.tpl`, which wins over the repo template. Cluster names
+are yours to keep private: put `KUBE_CLUSTERS=(prod staging)` (tab
+completion) and `alias kprod='kuse prod'` in `~/.private/kube.zsh`.
+
 ## Prompt
 
 Pure-zsh powerline prompt with four independent, persisted knobs. A theme
