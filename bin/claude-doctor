@@ -288,7 +288,7 @@ if docker image inspect "$IMAGE" >/dev/null 2>&1; then
         fi
     done
 else
-    check "$IMAGE built" skip "will build lazily on first run — or 'docker build -t $IMAGE $DOT/docker/claude-review/'"
+    check "$IMAGE built" skip "will build lazily on first run — or 'rebuild-images claude-review'"
 fi
 
 # --- Deep end-to-end checks ---

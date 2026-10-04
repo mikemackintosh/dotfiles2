@@ -99,6 +99,16 @@ case "$self" in
     exit 127 ;;
 esac
 
+# Dependency install scripts are the npm supply-chain hole, so they're off
+# unless DOCKER_SHIM_ALLOW_SCRIPTS=1. pnpm needs nothing here: it already
+# refuses any build script not allowlisted in the project (`pnpm approve-builds`).
+# npm still runs a script you name (`npm test`, `npm run x`), minus pre/post hooks.
+case "$self" in
+  node|npm|npx|corepack|yarn)
+    [[ ${DOCKER_SHIM_ALLOW_SCRIPTS:-} == 1 ]] \
+      || env+=(npm_config_ignore_scripts=true YARN_IGNORE_SCRIPTS=true YARN_ENABLE_SCRIPTS=false) ;;
+esac
+
 # Resolve docker even under a minimal PATH (e.g. Xcode build phases, which often
 # omit /usr/local/bin where Docker Desktop's CLI symlink lives).
 docker_bin="$(command -v docker 2>/dev/null || true)"

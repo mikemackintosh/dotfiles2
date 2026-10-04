@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# rebuild-images — rebuild the images under docker/ (each docker/<name>/ → <name>:local)
+# and re-pull the stock images the shims run (node:22, python:3.12-slim, …).
+#
+# Usage:
+#   rebuild-images [--no-cache] [name...]   # default: every docker/*/Dockerfile + shims
+#
+# Examples:
+#   rebuild-images                  # everything
+#   rebuild-images claude-review    # just that one
+#   rebuild-images shims            # just re-pull the shim images
+#   rebuild-images --no-cache       # also redo the apt layers
+#
+# Builds always --pull and bust the CACHE_BUST arg so package installs
+# re-resolve `latest`; --no-cache only adds the layers above it.
+# ~/.npmrc goes in as a BuildKit secret (private registry), never a layer.
+# CLAUDE_REVIEW_IMAGE overrides the claude-review tag, as in claude-in-docker.
+#
+# Shim images are read from bin/docker-shim and bin/chrome-devtools-mcp, so
+# the list can't drift. Docker never refreshes a tag it already has, so
+# without this `node:22` stays whatever was pulled first.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+
+build_extra=()
+names=()
+for a in "$@"; do
+    case "$a" in
+        --no-cache) build_extra+=(--no-cache) ;;
+        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) echo "rebuild-images: unknown flag $a" >&2; exit 2 ;;
+        *) names+=("$a") ;;
+    esac
+done
+
+if (( ${#names[@]} == 0 )); then
+    for f in "$root"/docker/*/Dockerfile; do
+        names+=("$(basename "$(dirname "$f")")")
+    done
+    names+=(shims)
+fi
+
+docker_bin="$(command -v docker 2>/dev/null || true)"
+[[ -n $docker_bin ]] || { echo "rebuild-images: docker not found" >&2; exit 127; }
+
+shim_images() {
+    {
+        sed -n 's/.*image_default="\([^"]\{1,\}\)".*/\1/p' "$root/bin/docker-shim"
+        sed -n 's/^IMAGE="\${[A-Z_]*:-\([^}]*\)}"$/\1/p' "$root/bin/chrome-devtools-mcp"
+    } | sort -u
+}
+
+failed=()
+for n in "${names[@]}"; do
+    if [[ $n == shims ]]; then
+        imgs=()
+        while IFS= read -r i; do imgs+=("$i"); done < <(shim_images)
+        if (( ${#imgs[@]} == 0 )); then
+            echo "rebuild-images: found no shim images — has bin/docker-shim changed shape?" >&2
+            failed+=(shims); continue
+        fi
+        for i in "${imgs[@]}"; do
+            echo "→ pulling $i"
+            if "$docker_bin" pull -q "$i"; then
+                echo "✓ $i"
+            else
+                echo "✗ $i" >&2
+                failed+=("$i")
+            fi
+        done
+        continue
+    fi
+
+    dir="$root/docker/$n"
+    if [[ ! -f $dir/Dockerfile ]]; then
+        echo "rebuild-images: no $dir/Dockerfile" >&2
+        failed+=("$n"); continue
+    fi
+    tag="$n:local"
+    [[ $n == claude-review ]] && tag="${CLAUDE_REVIEW_IMAGE:-$tag}"
+
+    args=(build --pull -t "$tag" --build-arg "CACHE_BUST=$(date +%s)")
+    [[ -f $HOME/.npmrc ]] && args+=(--secret "id=npmrc,src=$HOME/.npmrc")
+    args+=(${build_extra[@]+"${build_extra[@]}"} "$dir")
+
+    echo "→ building $tag"
+    if DOCKER_BUILDKIT=1 "$docker_bin" "${args[@]}"; then
+        echo "✓ $tag"
+    else
+        echo "✗ $tag (exit $?)" >&2
+        failed+=("$n")
+    fi
+done
+
+if (( ${#failed[@]} )); then
+    echo "rebuild-images: failed: ${failed[*]}" >&2
+    exit 1
+fi

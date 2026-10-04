@@ -507,7 +507,7 @@ claude mcp list                    # servers Claude is aware of
 claude mcp status                  # per-server connect state
 ```
 
-**Common runtime deps** are baked into the image: `node`, `npm`,
+**Common runtime deps** are baked into the image: `node`, `pnpm`, `npm`,
 `npx` (JS-based MCPs), `python3`, `pip`, `pipx` (Python-based MCPs),
 `git`, `curl`, `jq`. For anything else, install it from pane 2
 (the container shell) — it lives only for that session because
@@ -518,38 +518,27 @@ claude mcp status                  # per-server connect state
 
 - Passes it as a BuildKit secret when building the image
   (`docker build --secret id=npmrc,src=$HOME/.npmrc …`) so
-  `npm i -g @anthropic-ai/claude-code` can authenticate to the private
+  `pnpm add -g @anthropic-ai/claude-code` can authenticate to the private
   registry during build. The secret is mounted only for that one
   `RUN` step and is never baked into a layer.
 - Mounts it read-only at `~/.npmrc` inside the container at runtime,
   so any `npx <private-pkg>` MCP servers can authenticate too.
 
-**`ignore-scripts=true` in `~/.npmrc` breaks the postinstall.** The
-Dockerfile passes `--ignore-scripts=false` on the `npm install` call
-so the vendor postinstall — which downloads the platform-native
-`claude` binary — actually runs. Without this the image builds fine,
-but `claude` inside errors with:
+**Claude Code is installed with pnpm, which runs no install scripts
+except the ones named in `--allow-build`.** The Dockerfile allows only
+`@anthropic-ai/claude-code`, whose postinstall picks the
+platform-native `claude` binary. A corporate `ignore-scripts=true` in
+`~/.npmrc` does not override `--allow-build`. The `RUN` retries the
+install three times and ends with `claude --version`, so a binary
+that never downloaded fails the build. Otherwise you'd get an image
+that builds clean and then fails with "claude native binary not
+installed".
 
-```
-Error: claude native binary not installed.
-Either postinstall did not run (--ignore-scripts, ...) or the
-platform-native optional dependency was not downloaded (--omit=optional).
-```
-
-The Dockerfile also re-runs the postinstall manually as a safety
-net and finishes with `claude --version` so the build fails loudly
-if the CLI is broken instead of producing a silently-bad image.
-
-If the initial build failed with `ECONNREFUSED` against
-`registry.npmjs.org`, that was the missing secret mount — pull latest
-and rebuild:
+If the build failed with `ECONNREFUSED` against `registry.npmjs.org`,
+the npmrc secret was not mounted. `rebuild-images` always passes it:
 
 ```sh
-docker rmi claude-review:local 2>/dev/null
-git feature <spec> "…"   # lazy-rebuilds with the secret
-# or build explicitly:
-DOCKER_BUILDKIT=1 docker build --secret id=npmrc,src=$HOME/.npmrc \
-    -t claude-review:local ~/.dotfiles/docker/claude-review/
+rebuild-images claude-review
 ```
 
 ## Troubleshooting

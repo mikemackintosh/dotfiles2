@@ -68,6 +68,7 @@ fi
 
 # Lazy build. Uses a BuildKit secret mount for ~/.npmrc so the build
 # can pull @anthropic-ai/claude-code from a private npm registry
+# (bin/rebuild-images builds the same way, to refresh it)
 # without baking auth into the image. DOCKER_BUILDKIT=1 is honored by
 # every modern Docker Desktop; force it in case the host env has it off.
 if ! "$docker_bin" image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -143,7 +144,7 @@ run+=(-v "$passwd_file:/etc/passwd:ro" -v "$group_file:/etc/group:ro")
 # warning: your host Claude Code was installed via `claude install`,
 # which put the binary at ~/.local/bin/claude and recorded that path
 # in ~/.claude.json. Inside the container the real claude is at
-# /usr/local/bin/claude (via `npm i -g` in the Dockerfile), so the
+# /usr/local/bin/claude (pnpm global, symlinked in the Dockerfile), so the
 # recorded native path is a dead pointer. Shim it to delegate.
 claude_shim="${TMPDIR:-/tmp}/claude-in-docker.claude-shim"
 cat > "$claude_shim" <<'SHIM'

@@ -21,7 +21,8 @@ RUN set -eux; \
         docker-ce-cli docker-compose-plugin; \
     rm -rf /var/lib/apt/lists/*
 
-# node (for JS-based MCP servers via npx) is already the base image.
+# node (for JS-based MCP servers via npx) is already the base image;
+# pnpm is added below.
 # python3 (above) covers python-based MCP servers.
 # openssh-client provides ssh-keygen for SSH-based commit signing —
 # `git commit -S` under `gpg.format=ssh` calls `ssh-keygen -Y sign`,
@@ -30,46 +31,43 @@ RUN set -eux; \
 # is bypassed inside the container via GIT_CONFIG_PARAMETERS — see
 # bin/claude-in-docker.
 
-# BuildKit secret mount: reads ~/.npmrc at build time only (never
-# baked into the image). Required when the host is using a private
-# npm registry.
-#
-# --ignore-scripts=false is required because a corporate ~/.npmrc
-# typically sets `ignore-scripts=true` for supply-chain safety, but
-# @anthropic-ai/claude-code's postinstall is what downloads the
-# platform-native `claude` binary — skip it and `claude` errors out
-# with "claude native binary not installed" at runtime.
-#
-# The platform binary ships as an *optional* dependency
-# (@anthropic-ai/claude-code-linux-arm64 etc, ~280 MB). npm treats a
-# failed optional dep as success — it just logs "reify failed optional
-# dependency" and prints "added 1 package". Behind a corporate Nexus
-# proxy a cold-cache fetch of that tarball routinely stalls or drops,
-# so the build silently loses `claude`'s binary and only blows up at
-# the `claude --version` smoke test. Hence: retry the install, then
-# install the native package *explicitly* as a direct dep so any
-# remaining failure is loud instead of silent. Node resolves it from
-# /usr/local/lib/node_modules just as well as from the nested path.
-#
-# The manual `node install.cjs` is a belt-and-suspenders fallback in
-# case --ignore-scripts=false doesn't fully override the npmrc.
+# pnpm, not npm: it runs no dependency lifecycle scripts unless the package
+# is named in --allow-build, and (pnpm 11+) won't resolve a version younger
+# than minimumReleaseAge (1 day) — so `claude` here trails npm `latest` by
+# about a day. That is the point: a hijacked publish gets caught first.
+# npm is used once, script-free, to bootstrap pnpm itself (no deps). Pinned
+# exactly: this step gets no release-age delay, so bump it by hand.
+ARG PNPM_VERSION=12.9.1
+ENV PNPM_HOME=/usr/local/share/pnpm
+ENV PATH=$PNPM_HOME/bin:$PATH
 RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
-    --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm install -g --ignore-scripts "pnpm@$PNPM_VERSION" && pnpm --version
+
+# BuildKit secret mount: reads ~/.npmrc at build time only (never baked into
+# the image), for a private registry. A corporate `ignore-scripts=true` there
+# doesn't block --allow-build.
+#
+# @anthropic-ai/claude-code's postinstall picks the platform-native binary,
+# which ships as an *optional* dep (~110 MB). Behind a corporate proxy that
+# fetch routinely stalls and a failed optional dep is not an install error,
+# so `claude --version` is inside the retry: a missing binary retries, then
+# fails the build instead of the first run.
+#
+# CACHE_BUST is set by bin/rebuild-images so a rebuild re-resolves `latest`.
+ARG CLAUDE_CODE_VERSION=latest
+ARG CACHE_BUST=0
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc,required=false \
+    --mount=type=cache,target=/root/.cache/pnpm-store,sharing=locked \
     set -eux; \
-    export npm_config_fetch_retries=5 \
-           npm_config_fetch_retry_maxtimeout=120000 \
-           npm_config_fetch_timeout=600000; \
     for attempt in 1 2 3; do \
-        npm install -g --ignore-scripts=false @anthropic-ai/claude-code && break; \
-        echo "npm install attempt $attempt failed; retrying"; sleep 5; \
+        pnpm add -g --store-dir /root/.cache/pnpm-store \
+            --allow-build=@anthropic-ai/claude-code \
+            "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" \
+        && claude --version && break; \
+        [ "$attempt" = 3 ] && exit 1; \
+        echo "claude-code install attempt $attempt failed; retrying"; sleep 5; \
     done; \
-    pkg=/usr/local/lib/node_modules/@anthropic-ai/claude-code; \
-    ver=$(node -p "require('$pkg/package.json').version"); \
-    native="@anthropic-ai/claude-code-linux-$(node -p process.arch)"; \
-    node -e "require.resolve('$native/package.json',{paths:['$pkg']})" \
-        || npm install -g --ignore-scripts=false "$native@$ver"; \
-    if [ -f "$pkg/install.cjs" ]; then node "$pkg/install.cjs" || true; fi; \
-    claude --version
+    ln -sf "$PNPM_HOME/bin/claude" /usr/local/bin/claude
 
 ENTRYPOINT ["/usr/bin/dumb-init","--"]
 CMD ["claude"]

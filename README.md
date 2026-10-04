@@ -317,9 +317,25 @@ Both `git-review` and `git-feature` use:
   ports (49152–65535) and a per-workdir `COMPOSE_PROJECT_NAME`. Uses the
   Compose v2.24+ `!override` YAML tag.
 - `docker/claude-review/Dockerfile` — the image (`node:22-slim` + git + ssh
-  + docker CLI + `@anthropic-ai/claude-code`). Built lazily by
-  `claude-in-docker` on first use, or ahead of time with
-  `docker build -t claude-review:local ~/.dotfiles/docker/claude-review/`.
+  + docker CLI + pnpm + `@anthropic-ai/claude-code`). Built lazily by
+  `claude-in-docker` on first use; refresh it with `rebuild-images`.
+
+### `rebuild-images` — rebuild the images under `docker/`
+
+```sh
+rebuild-images                  # every docker/<name>/ → <name>:local, + shims
+rebuild-images claude-review    # just one
+rebuild-images shims            # just re-pull the shim images (node:22, …)
+rebuild-images --no-cache       # also redo the apt layers
+```
+
+Always pulls the base image and re-resolves `latest` for package installs, so
+this is how you pick up a new Claude Code. `~/.npmrc` goes in as a BuildKit
+secret, never a layer. The image installs Claude Code with pnpm, which won't
+take a version under a day old: the image trails npm `latest` by about a day
+on purpose. The shims run stock images Docker never refreshes once pulled;
+`rebuild-images` re-pulls the ones named in `bin/docker-shim` and
+`bin/chrome-devtools-mcp`.
 
 ### `git-identity` — pick which 1Password key signs and pushes
 
@@ -497,6 +513,13 @@ Extra `docker run` args: `DOCKER_SHIM_ARGS` (all tools) or `<NAME>_DOCKER_ARGS`.
 The `-slim` Python/Ruby images can't compile native extensions — override the
 image for those. Add a tool by extending the `case` in `bin/docker-shim` and the
 symlink loop in `install.sh`.
+
+**Install scripts are off.** `npm`/`npx`/`yarn` run with `ignore-scripts`, so a
+dependency's `preinstall`/`postinstall` never executes; a script you name
+(`npm test`, `npm run build`) still runs, minus its pre/post hooks. Opt back in
+for one command with `DOCKER_SHIM_ALLOW_SCRIPTS=1 npm install`. Prefer `pnpm`:
+it already refuses unlisted build scripts and makes you allowlist them per
+project with `pnpm approve-builds`, so nothing to override.
 
 There's no official JetBrains Kotlin image, so the Kotlin shims run a plain JDK
 and bootstrap JetBrains' own `kotlin-compiler-<ver>.zip` into

@@ -50,7 +50,11 @@ bin/                                      → user scripts (on $PATH)
   iterm-themes                              import iterms/*.itermcolors into iTerm2
   term-marks                                portable OSC 133 marks for remote hosts
   docker-shim                               multi-call Docker shim; tool names
-                                            (node/npm/pnpm/python3/ruby/…) symlink to it
+                                            (node/npm/pnpm/python3/ruby/…) symlink to it;
+                                            npm/npx/yarn install scripts off by default
+  rebuild-images                            rebuild docker/<name>/ → <name>:local
+                                            (pulls base, re-resolves latest)
+                                            + re-pulls the shim images
 claude/                                   → Claude Code config
   settings.json                             symlinked into ~/.claude/
   statusline.sh                             symlinked into ~/.claude/
