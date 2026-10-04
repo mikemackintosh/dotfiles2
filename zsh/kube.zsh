@@ -58,6 +58,7 @@ kconfig() {
   print "namespace:  ${KUBE_NAMESPACE:-<context default>}"
   (( ${#KUBE_DOCKER_ARGS} ))  && print "docker args:  ${KUBE_DOCKER_ARGS[*]}"
   (( ${#KUBE_KUBECTL_ARGS} )) && print "kubectl args: ${KUBE_KUBECTL_ARGS[*]}"
+  return 0
 }
 
 # kuse — render a cluster's kubeconfig from 1Password into this shell only.
@@ -153,8 +154,14 @@ _kube_forget() {
   unset _KUBE_DIR
 }
 
+# A subshell that calls `exit` runs the parent's zshexit hooks too ($$ is
+# inherited), which deleted the live kubeconfig mid-session. Only the shell
+# that owns the dir may clean it up.
+_kube_exit() { [[ $sysparams[pid] == $$ ]] && _kube_forget }
+
+zmodload zsh/system
 autoload -Uz add-zsh-hook
-add-zsh-hook zshexit _kube_forget
+add-zsh-hook zshexit _kube_exit
 
 _kuse() {
   local -a names
