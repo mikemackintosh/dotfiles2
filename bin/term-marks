@@ -16,8 +16,8 @@
 #   term-marks --check            report whether THIS shell emits marks
 #
 # Example:
-#   term-marks --install duppster@172.20.3.3
-#   ssh duppster@172.20.3.3       # marks now appear for remote prompts
+#   term-marks --install you@host.example
+#   ssh you@host.example       # marks now appear for remote prompts
 
 set -euo pipefail
 

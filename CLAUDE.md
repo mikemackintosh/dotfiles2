@@ -18,7 +18,7 @@ These are non-obvious and have bitten us before — uphold them.
   `vim/vendor.lock`. Reason: security review of imported code.
 - **Never commit personal identity.** `.gitconfig` is sanitized;
   identity comes from `~/.private/gitconfig` (and
-  `~/.private/gitconfig-work` for wealthsimple paths) via
+  `~/.private/gitconfig-work` for work-org paths) via
   `[include]` and `[includeIf]`. Don't move identity into the
   committed config.
 - **Comments are sparse.** Code should be self-explanatory; comment

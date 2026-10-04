@@ -10,7 +10,7 @@
 # present, otherwise the defaults at the bottom of collect_projects.
 # Each line is an exact dir OR a shell glob:
 #
-#   ~/go/src/github.com/wealthsimple/*
+#   ~/go/src/github.com/your-org/*
 #   ~/.dotfiles
 #   ~/personal/blog
 #
@@ -31,7 +31,8 @@ collect_projects() {
             done
         done < "$PATHS_FILE"
     else
-        for x in "$HOME/go/src/github.com/wealthsimple"/*/; do
+        # No paths file: scan common project layouts, owner-agnostic.
+        for x in "$HOME/go/src/github.com"/*/*/ "$HOME/Projects"/*/; do
             [[ -d $x ]] && echo "${x%/}"
         done
         [[ -d "$HOME/.dotfiles" ]] && echo "$HOME/.dotfiles"

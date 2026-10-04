@@ -373,7 +373,7 @@ Desktop for Mac).
 
 Your host `~/.claude/settings.json` wires up every Claude event
 (`PreToolUse`, `PostToolUse`, `SessionStart`, `Stop`, …) to run
-`/Users/duppster/.config/iterm2/cc-status` — a macOS Mach-O binary
+`~/.config/iterm2/cc-status` — a macOS Mach-O binary
 shipped with iTerm.app that updates iTerm2's status line. It can't
 run in the Linux container, and every tool call would print
 `/bin/sh: … cc-status: not found` into the claude pane.

@@ -4,7 +4,7 @@
 # kubeconfig mounted read-only and forwards every argument straight through.
 #
 #   k get pods
-#   k -n qondom rollout restart deployment qondom-web
+#   k -n myapp rollout restart deployment myapp-web
 #   echo "$manifest" | k apply -f -
 #
 # Everything is overridable via env vars, so it works across clusters/projects
@@ -12,17 +12,17 @@
 # with a direnv `.envrc` (direnv is already wired up in .zshrc):
 #
 #   KUBE_IMAGE         container image to run         (default: bitnami/kubectl:latest)
-#   KUBECONFIG_FILE    host kubeconfig, mounted RO    (default: $HOME/dcs-pro1-kubeconfig.yaml)
+#   KUBECONFIG_FILE    host kubeconfig, mounted RO    (default: $HOME/.kube/config)
 #   KUBE_NAMESPACE     default namespace, adds -n     (default: empty → kubeconfig/context default)
 #   KUBE_DOCKER_ARGS   extra `docker run` args        (array, e.g. (--network host))
 #   KUBE_KUBECTL_ARGS  extra kubectl args, prepended  (array, e.g. (--context prod))
 #
-# Example .envrc for the qondom repo:
-#   export KUBE_NAMESPACE=qondom
-#   export KUBECONFIG_FILE="$HOME/dcs-pro1-kubeconfig.yaml"
+# Example .envrc for the myapp repo:
+#   export KUBE_NAMESPACE=myapp
+#   export KUBECONFIG_FILE="$HOME/.kube/config"
 
 : ${KUBE_IMAGE:=bitnami/kubectl:latest}
-: ${KUBECONFIG_FILE:=$HOME/dcs-pro1-kubeconfig.yaml}
+: ${KUBECONFIG_FILE:=$HOME/.kube/config}
 : ${KUBE_NAMESPACE:=}
 
 k() {
@@ -106,7 +106,7 @@ kuse() {
     _kube_forget
     _kube_sops ""
     unset KUBECONFIG KUBE_CLUSTER
-    KUBECONFIG_FILE=$HOME/dcs-pro1-kubeconfig.yaml
+    KUBECONFIG_FILE=$HOME/.kube/config
     return
   fi
   if ! command -v op &>/dev/null; then

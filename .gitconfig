@@ -118,9 +118,6 @@
   insteadOf = brew:
   insteadOf = ssh://git@github.com:homebrew
 
-[url "ssh://git@rocketbox.ai/"]
-  insteadOf = https://rocketbox.ai/
-
 # Per-OS overrides — no-op if the target file is absent.
 [IncludeIf "gitdir:/Users"]
   path = ~/.gitconfig-osx
@@ -136,12 +133,16 @@
 [include]
   path = ~/.private/gitconfig
 
-# Per-directory identity overlays. Each block applies only when the
-# repo's gitdir lives under the given path (trailing slash matters —
-# it makes the match recursive). Keeps work commits attributed to
-# the work email automatically, without a pre-commit guard.
-[includeIf "gitdir:~/go/src/github.com/wealthsimple/"]
-  path = ~/.private/gitconfig-work
+# Per-directory identity overlays live in ~/.private, not here, so this
+# committed file names no employer or client. To attribute work repos to
+# a work email automatically, add a block like this to ~/.private/gitconfig
+# (the [include] above pulls it in; trailing slash makes the match recursive):
+#
+#   [includeIf "gitdir:~/go/src/github.com/your-org/"]
+#     path = ~/.private/gitconfig-work
+#
+# Private host URL rewrites (e.g. insteadOf for an internal git server)
+# belong there too. `git-identity overlay <dir>` writes these for you.
 
 # The signing key itself lives in ~/.private/gitconfig; only the
 # verification list is safe to commit. Must sit after [include] to win.

@@ -9,8 +9,8 @@ import (
 
 func TestClusterName(t *testing.T) {
 	for _, tc := range []struct{ vault, title, want string }{
-		{"Certifly", "kube-prod", "certifly-prod"},
-		{"Danger Close", "kube-prod", "danger-close-prod"},
+		{"Acme", "kube-prod", "acme-prod"},
+		{"Edge Co", "kube-prod", "edge-co-prod"},
 		{"Ops", "kube-EU West", "ops-eu-west"},
 		{"Ops", "kube-", "ops"},
 	} {
@@ -22,8 +22,8 @@ func TestClusterName(t *testing.T) {
 
 func TestMapRoundTrip(t *testing.T) {
 	cs := []cluster{
-		{Name: "certifly-prod", VaultID: "nmhz2xay", VaultName: "Certifly", ItemID: "dvv24c4e", ItemTitle: "kube-prod", Sops: true, Registries: []string{"dockerhub", "ecr"}},
-		{Name: "danger-close-prod", VaultID: "ehvtxiv3", VaultName: "Danger Close", ItemID: "j7h5czpy", ItemTitle: "kube-prod"},
+		{Name: "acme-prod", VaultID: "v1aaaaaa", VaultName: "Acme", ItemID: "dvv24c4e", ItemTitle: "kube-prod", Sops: true, Registries: []string{"dockerhub", "ecr"}},
+		{Name: "edge-co-prod", VaultID: "v2bbbbbb", VaultName: "Edge Co", ItemID: "j7h5czpy", ItemTitle: "kube-prod"},
 	}
 	path := filepath.Join(t.TempDir(), "sub", "kube-clusters.zsh")
 	if err := writeMap(path, cs); err != nil {

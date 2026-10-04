@@ -99,11 +99,12 @@ that is not there. Exit 1 on any of those.
 
 | | work Mac | personal Mac |
 |---|---|---|
-| `git-identity base` | work email, Wealthsimple key signs and pushes; keep only work keys | personal email, personal signing key, account key pushes; leave the work key out |
-| `git-identity overlay` | not needed | only if work repos get cloned here: `~/go/src/github.com/wealthsimple/` → work email + work key |
+| `git-identity base` | work email, work key signs and pushes; keep only work keys | personal email, personal signing key, account key pushes; leave the work key out |
+| `git-identity overlay` | not needed | only if work repos get cloned here: `~/go/src/github.com/your-org/` → work email + work key |
 
-The tracked `.gitconfig` already declares the wealthsimple `includeIf`
-pointing at `~/.private/gitconfig-work`, so the overlay picker defaults
+The tracked `.gitconfig` shows the work `includeIf` pattern as a comment;
+add your real one (pointing at `~/.private/gitconfig-work`) to
+`~/.private/gitconfig`, so the overlay picker defaults
 its name to `work` and fills that file rather than adding a second
 include.
 

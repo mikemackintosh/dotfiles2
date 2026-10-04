@@ -6,7 +6,7 @@
 local cap=$''
 local sep=$''
 local git=$''
-local sample='…/wealthsimple/ainstein'
+local sample='…/acme/webapp'
 local branch='main'
 
 _render() {

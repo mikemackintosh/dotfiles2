@@ -11,7 +11,7 @@
 #   git-identity list                what the agent offers right now
 #
 # Example:
-#   git-identity overlay ~/go/src/github.com/wealthsimple/
+#   git-identity overlay ~/go/src/github.com/your-org/
 #
 # Writes only public material, only to untracked per-machine files:
 #   ~/.private/gitconfig[-LABEL]        name, email, signingkey (+ includeIf)
@@ -30,7 +30,7 @@ EXAMPLE="$DOTFILES/gitconfig.private.example"
 SIGN_PROG="$DOTFILES/bin/git-ssh-sign"
 AGENT_TOML="$HOME/.config/1Password/ssh/agent.toml"
 SIGNERS="$HOME/.config/git/allowed_signers"
-DEFAULT_OVERLAY_DIR="~/go/src/github.com/wealthsimple/"
+DEFAULT_OVERLAY_DIR="~/go/src/github.com/your-org/"
 TILDE='~'   # bash tilde-expands a bare ~ in a substitution replacement
 
 bold=$'\033[1m'; dim=$'\033[2m'; blue=$'\033[1;34m'; green=$'\033[32m'

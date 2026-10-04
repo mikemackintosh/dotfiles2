@@ -139,7 +139,7 @@ zsh/                                        plugin files sourced from .zshrc
 The public `.gitconfig` contains zero personal data. Identity lives in
 `~/.private/gitconfig` (template in this repo) and is pulled in via `include`.
 
-For work commits under `~/go/src/github.com/wealthsimple/...`, an `includeIf`
+For work commits under `~/go/src/github.com/your-org/...`, an `includeIf`
 overlay auto-swaps `user.email` to the work address from
 `~/.private/gitconfig-work`. Other paths keep the personal email.
 `git-identity overlay DIR` writes that file — name, email, signing key and,
@@ -261,7 +261,7 @@ tmux-sessionizer            # fzf picker
 tmux-sessionizer <dir>      # skip the picker
 ```
 
-Default project list: wealthsimple repos under `~/go/src/github.com/wealthsimple/`
+Default project list: repos under `~/go/src/github.com/*/` and `~/Projects/`
 plus `~/.dotfiles`. Override per-machine via `~/.dotfiles/.tmux-sessionizer-paths`
 (gitignored), one entry per line — exact paths or shell globs:
 
@@ -323,9 +323,9 @@ Both `git-review` and `git-feature` use:
 ### `registry-login` — registry logins from the cluster's 1Password item
 
 ```sh
-kuse certifly-prod && registry-login           # every registry on the active cluster's item
-registry-login certifly-prod                   # or name the cluster
-registry-login --check loves2splug/certifly-horizon   # + prove the Docker Hub login may push
+kuse acme-prod && registry-login           # every registry on the active cluster's item
+registry-login acme-prod                       # or name the cluster
+registry-login --check myorg/myapp             # + prove the Docker Hub login may push
 ```
 
 Registry credentials are optional fields on the same `kube-*` item `kuse`
@@ -609,7 +609,7 @@ read-only and forwards all args. `kconfig` prints the effective settings.
 
 ```sh
 k get pods
-k -n qondom rollout restart deployment qondom-web
+k -n myapp rollout restart deployment myapp-web
 echo "$manifest" | k apply -f -
 kconfig                                       # show image / kubeconfig / namespace
 ```
@@ -619,7 +619,7 @@ Override per-machine in `zsh/private.zsh`, or per-repo with a direnv `.envrc`:
 | Env var             | Default                          | Purpose                          |
 |---------------------|----------------------------------|----------------------------------|
 | `KUBE_IMAGE`        | `bitnami/kubectl:latest`         | container image                  |
-| `KUBECONFIG_FILE`   | `$HOME/dcs-pro1-kubeconfig.yaml` | kubeconfig, mounted RO           |
+| `KUBECONFIG_FILE`   | `$HOME/.kube/config`             | kubeconfig, mounted RO           |
 | `KUBE_NAMESPACE`    | *(empty)*                        | default namespace (adds `-n`)    |
 | `KUBE_DOCKER_ARGS`  | *(array)*                        | extra `docker run` args          |
 | `KUBE_KUBECTL_ARGS` | *(array)*                        | extra kubectl args, prepended    |
@@ -634,13 +634,13 @@ titled `kube-<something>` with fields `server`, `ca` (base64 CA data) and
 ```sh
 kclusters sync   # find kube-* items in every vault, write the map (-n: preview)
 kclusters        # list what is mapped (offline)
-kuse certifly-prod     # render + switch; tab-completes from the map
+kuse acme-prod         # render + switch; tab-completes from the map
 kuse             # fzf picker (active one marked; Esc keeps it)
 kuse -           # forget it, delete the file
 ```
 
 `kclusters sync` names each cluster `<vault>-<item minus kube->` (so
-`kube-prod` in *Danger Close* is `danger-close-prod`), skips items missing a
+`kube-prod` in the *Acme* vault is `acme-prod`), skips items missing a
 field, and writes `~/.private/kube-clusters.zsh` (0600) keyed by vault and item
 **ID** — so spaces in vault names don't matter and nothing identifying is
 committed. It is Go (`cmd/kclusters`, stdlib only), built into
@@ -656,7 +656,7 @@ exit; dirs left by a killed shell are swept by the next `kuse`.
 ```sh
 age-keygen                     # paste the whole output into the item's sops-age-key field
 kclusters sync                 # validates the field; marks the cluster in KUBE_SOPS
-kuse certifly-prod             # exports SOPS_AGE_KEY_CMD="op read op://<vault>/<item>/sops-age-key"
+kuse acme-prod                 # exports SOPS_AGE_KEY_CMD="op read op://<vault>/<item>/sops-age-key"
 sops exec-env secrets.enc.yaml 'npm start'      # secrets in env only, no plaintext file
 ```
 
@@ -677,7 +677,7 @@ defaults to `kube-<name>`) or `vault/item`:
 
 ```zsh
 KUBE_CLUSTERS=(edge Infra/k8s-edge)
-alias kprod='kuse certifly-prod'
+alias kprod='kuse acme-prod'
 ```
 
 ## Prompt
