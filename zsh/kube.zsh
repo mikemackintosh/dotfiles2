@@ -139,9 +139,14 @@ kuse() {
     KUBE_OP_VAULT=$vault KUBE_OP_ITEM=$item \
       op inject -f -i "$in" -o "$out" >/dev/null ) || rc=$?
   rm -f -- "$in"
-  if (( rc )); then
+  # Verify the render produced a non-empty file BEFORE pointing KUBECONFIG at
+  # it. op inject has been seen to exit 0 without writing (locked 1Password,
+  # a flaky s.sock) — exporting a path to a missing file then surfaces far
+  # away as `docker run … -v $KUBECONFIG` turning /kc.yaml into a directory
+  # ("is a directory") in some unrelated Makefile. Fail here, at the cause.
+  if (( rc )) || [[ ! -s $out ]]; then
     rm -f -- "$out"
-    print -u2 "kuse: op inject failed for $vault/$item"
+    print -u2 "kuse: could not render $vault/$item — is 1Password unlocked? KUBECONFIG unchanged."
     return 1
   fi
 
