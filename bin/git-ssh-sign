@@ -35,6 +35,14 @@ if [[ -x $op ]]; then
         # the same 1Password approval prompt, so a signature you denied
         # stays denied.
         echo "git-ssh-sign: op-ssh-sign failed ($status) — retrying via ssh-keygen" >&2
+        # op-ssh-sign creates <buffer>.sig before its IPC dies, leaving a
+        # 0-byte file. git passes the buffer as the last arg and ssh-keygen
+        # writes <buffer>.sig — so without removing it, ssh-keygen prompts
+        # "Overwrite (y/n)?" and hangs anything non-interactive. We only get
+        # here because op-ssh-sign FAILED, so its .sig is never a real
+        # signature (success exits 0 above).
+        buf="${*: -1}"
+        [[ -n $buf && -f "$buf.sig" ]] && rm -f "$buf.sig"
     fi
 fi
 
