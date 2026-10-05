@@ -52,9 +52,9 @@ bin/                                      → user scripts (on $PATH)
   iterm-themes                              import iterms/*.itermcolors into iTerm2
   term-marks                                portable OSC 133 marks for remote hosts
   docker-shim                               multi-call Docker shim; tool names
-                                            (node/npm/pnpm/python3/ruby/…) symlink to it;
-                                            npm/npx/yarn install scripts off by default;
-                                            mounts only the project, $HOME is a volume
+                                            (node/pnpm/python3/ruby/…) symlink to it;
+                                            npm/npx/yarn refused → pnpm (DOCKER_SHIM_ALLOW_NPM=1
+                                            to override); mounts only the project, $HOME a volume
   registry-login                            docker login to Docker Hub / private /
                                             ECR / GCR from the kuse cluster's item
   dockerignore-init                         create/merge .dockerignore from

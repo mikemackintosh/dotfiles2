@@ -109,10 +109,22 @@ case "$self" in
     exit 127 ;;
 esac
 
-# Dependency install scripts are the npm supply-chain hole, so they're off
-# unless DOCKER_SHIM_ALLOW_SCRIPTS=1. pnpm needs nothing here: it already
-# refuses any build script not allowlisted in the project (`pnpm approve-builds`).
-# npm still runs a script you name (`npm test`, `npm run x`), minus pre/post hooks.
+# This machine uses pnpm. npm/npx/yarn are refused so an unhardened install
+# can't sneak in: pnpm won't run a dependency's build script unless it's
+# allowlisted (`pnpm approve-builds`) and won't resolve a version younger than
+# minimumReleaseAge, neither of which npm/yarn enforce. pnpm covers the
+# workflows — `pnpm install`, `pnpm <script>`, `pnpm dlx <pkg>` for npx.
+# Escape hatch for a genuine npm-lockfile-only project: DOCKER_SHIM_ALLOW_NPM=1.
+if [[ -z ${DOCKER_SHIM_ALLOW_NPM:-} ]]; then
+  case "$self" in
+    npm|yarn) echo "$self(shim): this machine uses pnpm — run 'pnpm' instead (or DOCKER_SHIM_ALLOW_NPM=1 $self … for a one-off)." >&2; exit 1 ;;
+    npx)      echo "npx(shim): this machine uses pnpm — run 'pnpm dlx' instead (or DOCKER_SHIM_ALLOW_NPM=1 npx … for a one-off)." >&2; exit 1 ;;
+  esac
+fi
+
+# Dependency install scripts are the supply-chain hole, so they're off unless
+# DOCKER_SHIM_ALLOW_SCRIPTS=1. This only bites the npm/yarn escape hatch above;
+# pnpm enforces its own allowlist. node/corepack don't install.
 case "$self" in
   node|npm|npx|corepack|yarn)
     [[ ${DOCKER_SHIM_ALLOW_SCRIPTS:-} == 1 ]] \

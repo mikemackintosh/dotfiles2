@@ -581,7 +581,8 @@ DOCKER_SHIM_ARGS='--network host' npm test    # extra docker run args
 
 | Tool (symlink → `docker-shim`)        | Default image                              |
 |---------------------------------------|--------------------------------------------|
-| `node` `npm` `npx` `yarn` `corepack`  | `node:22`                                  |
+| `node` `corepack`                     | `node:22`                                  |
+| `npm` `npx` `yarn`                    | refused → use `pnpm` / `pnpm dlx`          |
 | `pnpm`                                | `node:22` (activated via bundled corepack) |
 | `bun`                                 | `oven/bun:latest`                          |
 | `deno`                                | `denoland/deno:latest`                     |
@@ -596,12 +597,12 @@ The `-slim` Python/Ruby images can't compile native extensions — override the
 image for those. Add a tool by extending the `case` in `bin/docker-shim` and the
 symlink loop in `install.sh`.
 
-**Install scripts are off.** `npm`/`npx`/`yarn` run with `ignore-scripts`, so a
-dependency's `preinstall`/`postinstall` never executes; a script you name
-(`npm test`, `npm run build`) still runs, minus its pre/post hooks. Opt back in
-for one command with `DOCKER_SHIM_ALLOW_SCRIPTS=1 npm install`. Prefer `pnpm`:
-it already refuses unlisted build scripts and makes you allowlist them per
-project with `pnpm approve-builds`, so nothing to override.
+**This box uses pnpm.** `npm`, `npx` and `yarn` are refused with a pointer to
+`pnpm` / `pnpm dlx`, because pnpm won't run a dependency's build script unless
+it's allowlisted (`pnpm approve-builds`) and won't resolve a version younger
+than `minimumReleaseAge` — neither of which npm/yarn enforce. For a genuine
+npm-lockfile-only project, `DOCKER_SHIM_ALLOW_NPM=1 npm …` opts back in (and
+install scripts stay off there unless `DOCKER_SHIM_ALLOW_SCRIPTS=1` too).
 
 There's no official JetBrains Kotlin image, so the Kotlin shims run a plain JDK
 and bootstrap JetBrains' own `kotlin-compiler-<ver>.zip` into

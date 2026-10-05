@@ -22,4 +22,8 @@ set -euo pipefail
 
 export NPX_DOCKER_ARGS="--security-opt seccomp=unconfined${NPX_DOCKER_ARGS:+ $NPX_DOCKER_ARGS}"
 
+# npx is otherwise refused on this box (we standardized on pnpm); this is a
+# deliberate, pinned use of the npx shim, so opt it back in.
+export DOCKER_SHIM_ALLOW_NPM=1
+
 exec npx codex-security "$@"
