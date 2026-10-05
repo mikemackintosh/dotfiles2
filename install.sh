@@ -646,6 +646,38 @@ do_shell() {
     fi
 }
 
+# --------------------------------------------------- scheduled image audit
+
+LAUNCH_AGENT_LABEL="dotfiles.image-audit"
+LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist"
+
+# Render the launchd template with this machine's paths and load it, so
+# bin/image-audit runs weekly. Idempotent: bootout then bootstrap re-points
+# an existing agent at a fresh plist. launchd hands agents a bare PATH, so we
+# bake in brew + docker + repo bin or trivy/jq/docker/rebuild-images vanish.
+do_launchagents() {
+    step "Scheduled image audit"
+    [[ "$(uname -s)" == "Darwin" ]] || { info "not macOS — skipping"; return 0; }
+    local tpl="$DOTFILES/launchd/$LAUNCH_AGENT_LABEL.plist"
+    [[ -f "$tpl" ]] || { warn "no launchd template at $tpl"; return 0; }
+    if ! command -v trivy >/dev/null 2>&1; then
+        todo "trivy missing — the weekly image audit needs it. Run: brew bundle --file=$BREWFILE, then: $0"
+        return 0
+    fi
+    mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+    local agent_path="/opt/homebrew/bin:$HOME/.docker/bin:$DOTFILES/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    sed -e "s#__BIN__#$DOTFILES/bin/image-audit#" \
+        -e "s#__LOG__#$HOME/Library/Logs/image-audit.log#" \
+        -e "s#__PATH__#$agent_path#" "$tpl" > "$LAUNCH_AGENT_PLIST"
+    launchctl bootout "gui/$(id -u)/$LAUNCH_AGENT_LABEL" >/dev/null 2>&1 || true
+    if launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT_PLIST" >/dev/null 2>&1 \
+       || launchctl load -w "$LAUNCH_AGENT_PLIST" >/dev/null 2>&1; then
+        ok "weekly image-audit scheduled (Mon 09:00) → ~/Library/Logs/image-audit.log"
+    else
+        todo "could not load the image-audit agent. Run: launchctl bootstrap gui/$(id -u) $LAUNCH_AGENT_PLIST"
+    fi
+}
+
 # --------------------------------------------------------- macos prefs
 
 do_macos() {
@@ -852,6 +884,17 @@ check() {
             [[ $REG_IGNORE == ok ]] || { warn "$REG_IGNORE"; failed=1; }
             [[ $REG_GUARD  == ok ]] || { warn "$REG_GUARD";  failed=1; }
         fi
+
+        # No `launchctl list | grep -q`: grep -q closes the pipe, launchctl
+        # dies with SIGPIPE, and pipefail reads the whole thing as failure.
+        local agents; agents="$(launchctl list 2>/dev/null || true)"
+        if ! command -v trivy >/dev/null 2>&1; then
+            warn "trivy missing — weekly image audit can't run. Run: brew bundle --file=$BREWFILE"; failed=1
+        elif [[ "$agents" == *"$LAUNCH_AGENT_LABEL"* ]]; then
+            ok "weekly image-audit agent loaded"
+        else
+            warn "image-audit agent not loaded — run: $DOTFILES/install.sh launchagents"; failed=1
+        fi
     fi
 
     step "Terminal font and theme"
@@ -939,10 +982,11 @@ main() {
         macos)             exec "$DOTFILES/bin/macos-defaults" ;;
         # No preflight: this step touches nothing and needs no sudo.
         ssh)               do_ssh; summary; exit 0 ;;
+        launchagents)      do_launchagents; summary; exit 0 ;;
         identity)          exec "$DOTFILES/bin/git-identity" "${@:2}" ;;
         --no-macos)        run_macos=0 ;;
         "")                ;;
-        *) die "Usage: $0 [--check|--no-macos|links|brew|macos|ssh|identity]" ;;
+        *) die "Usage: $0 [--check|--no-macos|links|brew|macos|ssh|launchagents|identity]" ;;
     esac
 
     preflight
@@ -951,6 +995,7 @@ main() {
     do_gitidentity
     do_ssh
     do_shell
+    do_launchagents
     (( run_macos )) && do_macos
     summary
 }

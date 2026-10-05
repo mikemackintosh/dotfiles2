@@ -387,6 +387,25 @@ on purpose. The shims run stock images Docker never refreshes once pulled;
 `rebuild-images` re-pulls the ones named in `bin/docker-shim` and
 `bin/chrome-devtools-mcp`.
 
+### `image-audit` — scan the images for CVEs, refresh what's stale
+
+```sh
+image-audit            # report fixable HIGH/CRITICAL CVEs per image; exit 1 if any
+image-audit --fix      # pull fresh bases / rebuild local images, then rescan
+image-audit --json     # machine-readable (what the LaunchAgent consumes)
+```
+
+Scans every image the shims and `docker/*/` use with [`trivy`](https://trivy.dev)
+(its vuln DB bundles GHSA + NVD and refreshes each run, so this is also the
+advisory check). Only *fixable* HIGH/CRITICAL are counted — a vuln with no
+released fix can't be rebuilt away. `--fix` `docker pull`s stale base images
+and runs `rebuild-images` on local ones, then rescans and notifies.
+
+A **weekly LaunchAgent** (`launchd/dotfiles.image-audit.plist`, rendered and
+loaded by `install.sh` Mon 09:00) runs `image-audit --fix` and logs to
+`~/Library/Logs/image-audit.log`; `install.sh --check` reports whether it's
+loaded. Re-load it by hand with `install.sh launchagents`. macOS only.
+
 ### `git-identity` — pick which 1Password key signs and pushes
 
 ```sh
@@ -924,5 +943,4 @@ Prompt template for a full security review: severity rubric with EPSS plus a
 modeled exploitation-probability estimate, a self-contained fix brief per
 finding, an ethics gate for any live validation (owned accounts only, no
 enumeration, scrub recovered secrets at teardown), and a self-contained HTML
-report skeleton. See also `docs/android-skills.md` for the Android/Frida lab
-cold-start runbook it assumes.
+report skeleton.

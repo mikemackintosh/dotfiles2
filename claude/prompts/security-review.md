@@ -596,7 +596,7 @@ under an explicit, authorized engagement, and follow these rules without excepti
    `react-native-keys`, the values are AES-encrypted with a passphrase that ships in the same `.so`; hook the
    native `decryptor::dec` with Frida (or extract passphrase + ciphertext and run `openssl enc -d`) to recover
    the plaintext. The full mobile runbook (cold-start emulator, rooted arm64 image, `frida-server`, the
-   `react-native-keys` recipe, and teardown/scrub) is the companion doc **`docs/android-skills.md`**.
+   `react-native-keys` recipe, and teardown/scrub) is a separate private runbook (not shipped in this repo).
 2. **Model validation** confirms server-side authorization with one authorized request: derive the identifier
    the app would send (e.g. `HMAC-SHA256(customerId, secret)`), send the exact request the app makes, and read
    the result. If a finding depends on the server trusting a client value, this is where you confirm it, or
@@ -627,7 +627,7 @@ Produce a single shareable package so a recipient (human or a fixing agent) can 
   extraction artifacts in the bundle.
 - Audiences: the **HTML** (or its PDF export) for stakeholders; the **zip of per-finding Markdown** for a fixing
   agent, because each finding's Fix Implementation Brief makes it independently actionable.
-- Keep the reproduction runbook (`docs/android-skills.md`) as a **separate** artifact; share it only when the
+- Keep the reproduction runbook as a **separate**, privately-held artifact; share it only when the
   recipient needs to re-run the validation.
 
 ## QUALITY CHECKLIST

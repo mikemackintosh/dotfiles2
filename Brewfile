@@ -15,6 +15,7 @@ brew "eza"                       # modern ls; aliased in zsh/alias.zsh
 brew "jq"                        # parses Claude statusline JSON in claude/statusline.sh
 brew "tmux"                      # tmux/tmux.conf
 brew "gitleaks"                  # scanned by githooks/pre-push
+brew "trivy"                     # bin/image-audit scans base images for CVEs (weekly LaunchAgent)
 brew "dockutil"                  # used by bin/macos-defaults to rewrite the Dock
 brew "go"                        # githooks/pre-commit runs gofmt + go vet on staged .go
 brew "sops"                      # per-cluster secrets; key via SOPS_AGE_KEY_CMD (kuse)

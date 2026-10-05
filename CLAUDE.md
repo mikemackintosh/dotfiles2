@@ -62,6 +62,9 @@ bin/                                      → user scripts (on $PATH)
   rebuild-images                            rebuild docker/<name>/ → <name>:local
                                             (pulls base, re-resolves latest)
                                             + re-pulls the shim images
+  image-audit                               trivy-scan the images for CVEs;
+                                            --fix pulls/rebuilds stale ones
+                                            (weekly LaunchAgent, see launchd/)
 claude/                                   → Claude Code config
   settings.json                             symlinked into ~/.claude/
   statusline.sh                             symlinked into ~/.claude/
@@ -75,9 +78,10 @@ cmd/kclusters/                            → Go source for bin/kclusters (own g
 docker/                                   → Dockerfiles built by our tools
   dockerignore                              baseline .dockerignore template
   claude-review/                            base image for claude-in-docker
+launchd/                                  → LaunchAgent templates (rendered by install.sh)
+  dotfiles.image-audit.plist                weekly bin/image-audit --fix
 docs/                                     → per-tool deep-dive docs
   git-review.md, git-feature.md             ← start here to learn a tool
-  android-skills.md                         Android/Frida lab cold-start runbook
 githooks/                                 → global hooks (core.hooksPath)
   pre-commit                                gofmt + go vet on staged .go files
   pre-push                                  gitleaks on push
