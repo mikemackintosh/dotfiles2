@@ -162,10 +162,14 @@ sign_probe() {
     return $rc
 }
 
-# Can `op` reach the 1Password app? kuse and kclusters need it. `op account
-# list` answers from the app integration without an approval prompt; a real
-# read (`op vault list`) would block on one, which hangs an unattended run.
-# 0 = integrated, 1 = no op, 2 = op but the app integration is off.
+# Can `op` actually resolve secrets? kuse, kclusters and sops all need it.
+# `op account list` answers even when signed OUT (it just lists configured
+# accounts), so it is NOT enough — it reported "integrated" while op could
+# read nothing, which surfaced far away as kuse rendering an empty kubeconfig
+# and commits hanging on signing. `op whoami` is the real session check: it
+# returns non-zero when there is no active session, and never blocks on an
+# approval prompt. Neither call triggers one.
+# 0 = signed in, 1 = no op, 2 = op present but no account, 3 = not signed in.
 op_probe() {
     OP_DETAIL=""
     if ! command -v op >/dev/null 2>&1; then
@@ -180,7 +184,11 @@ op_probe() {
         OP_DETAIL="op sees no account — turn on 1Password → Settings → Developer → Integrate with 1Password CLI"
         return 2
     fi
-    OP_DETAIL="$n account(s)"
+    if ! op whoami >/dev/null 2>&1; then
+        OP_DETAIL="op is not signed in ($n account(s)) — unlock 1Password, or run: eval \$(op signin). Until then kuse/kclusters/sops read nothing."
+        return 3
+    fi
+    OP_DETAIL="$n account(s), signed in"
     return 0
 }
 
