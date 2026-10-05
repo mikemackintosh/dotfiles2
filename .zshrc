@@ -107,6 +107,7 @@ dot_plugins=(
     "go"
     "grep"
     "keybind"
+    "op"
     "kube"
     "docker"
     "private"

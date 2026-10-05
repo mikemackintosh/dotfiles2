@@ -113,6 +113,12 @@ kuse() {
     print -u2 "kuse: 1Password CLI (op) not found"
     return 127
   fi
+  # Establish a session up front (in this shell, so it persists past the
+  # render subshell), retrying signin. Without it op inject reads nothing.
+  if typeset -f _op_signin_retry >/dev/null && ! _op_signin_retry; then
+    print -u2 "kuse: 1Password CLI is not signed in — unlock 1Password, or run: eval \$(op signin)"
+    return 1
+  fi
 
   _kube_load
   local ref=${KUBE_CLUSTERS[$name]:-${KUBE_SYNCED[$name]:-$KUBE_OP_VAULT}}

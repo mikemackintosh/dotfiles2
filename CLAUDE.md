@@ -101,6 +101,8 @@ zsh/                                      → plugin files sourced by .zshrc
                                             with no .dockerignore
   kube.zsh                                  `k` — kubectl in Docker (+ `kconfig`,
                                             `kuse` per-cluster 1Password config)
+  op.zsh                                     wraps `op` to auto-`op signin`
+                                            (with retries) when the session died
   ssh-agent.zsh                             pins SSH_AUTH_SOCK to 1Password's
                                             agent (macOS ships an empty one)
   term-integration.zsh                      OSC 133 marks, OSC 7 cwd, DEC 2026
@@ -148,6 +150,15 @@ expected on machines that haven't run `brew bundle`.
   `claude-in-docker` forwarded that empty socket into the container for
   months. `zsh/ssh-agent.zsh` pins it to 1Password's socket; don't
   reintroduce a path-pattern test for "is this the keychain agent".
+- 1Password has **two independent surfaces** and one can work while the
+  other is dead: the **SSH agent** (serves keys; `ssh-keygen -Y sign`,
+  `git push`) and the **CLI session** (`op inject`/`op read`; kuse,
+  kclusters, sops). The agent signing a commit does NOT mean `op` can read
+  a secret — `op whoami` is the CLI check (`op account list` succeeds even
+  signed out, so it is not). A dead CLI session surfaced far away as kuse
+  rendering an empty kubeconfig ("is a directory" in a Makefile). `zsh/op.zsh`
+  wraps `op` to `op signin` (retried) when the session is gone; `op_probe`
+  in install.sh now checks `op whoami`, not just the account list.
 - `op-ssh-sign` does not use the SSH agent socket — it talks to the
   1Password app over `s.sock` in the same group container. That IPC can
   die on its own ("failed to fill whole buffer") while the agent still
