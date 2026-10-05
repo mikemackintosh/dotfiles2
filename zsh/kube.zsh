@@ -31,30 +31,62 @@ k() {
     return 127
   fi
 
-  if [[ ! -f $KUBECONFIG_FILE ]]; then
+  if [[ -z $_KUBE_CFG && ! -f $KUBECONFIG_FILE ]]; then
     print -u2 "k: kubeconfig not found: $KUBECONFIG_FILE"
-    print -u2 "   set KUBECONFIG_FILE to a valid path (env or .envrc)."
+    print -u2 "   run kuse, or set KUBECONFIG_FILE to a valid path (env or .envrc)."
     return 1
   fi
 
   # Build argv incrementally so unset/empty arrays contribute nothing
   # (a quoted expansion of an unset array yields a stray "" in zsh).
-  local -a run_args
-  run_args=(run --rm -i -v "${KUBECONFIG_FILE}:/kc.yaml:ro")
-  (( ${#KUBE_DOCKER_ARGS} ))  && run_args+=("${KUBE_DOCKER_ARGS[@]}")
-  run_args+=("$KUBE_IMAGE" --kubeconfig /kc.yaml)
-  [[ -n $KUBE_NAMESPACE ]]    && run_args+=(-n "$KUBE_NAMESPACE")
-  (( ${#KUBE_KUBECTL_ARGS} )) && run_args+=("${KUBE_KUBECTL_ARGS[@]}")
-  run_args+=("$@")
+  local -a run_args kargs
+  [[ -n $KUBE_NAMESPACE ]]    && kargs+=(-n "$KUBE_NAMESPACE")
+  (( ${#KUBE_KUBECTL_ARGS} )) && kargs+=("${KUBE_KUBECTL_ARGS[@]}")
+  kargs+=("$@")
 
-  docker "${run_args[@]}"
+  run_args=(run --rm -i)
+  (( ${#KUBE_DOCKER_ARGS} ))  && run_args+=("${KUBE_DOCKER_ARGS[@]}")
+  if [[ -n $_KUBE_CFG ]]; then
+    # kuse's config lives only in this shell, so hand it over by env NAME
+    # (value never on argv) and let the container write its own copy.
+    run_args+=(-e KUBE_CFG_DATA --entrypoint sh "$KUBE_IMAGE" -c
+      'f=$(mktemp) && printf %s "$KUBE_CFG_DATA" >"$f" && exec kubectl --kubeconfig "$f" "$@"' k)
+    KUBE_CFG_DATA=$_KUBE_CFG docker "${run_args[@]}" "${kargs[@]}"
+  else
+    run_args+=(-v "${KUBECONFIG_FILE}:/kc.yaml:ro" "$KUBE_IMAGE" --kubeconfig /kc.yaml)
+    docker "${run_args[@]}" "${kargs[@]}"
+  fi
 }
+
+# kuse keeps its kubeconfig in $_KUBE_CFG (not exported); these hand it to
+# one command at a time as KUBECONFIG, not --kubeconfig, because kubectl
+# rejects any flag before a plugin name (`kubectl cert-manager …`) and
+# plugins inherit the env. =(…), not <(…): helm reads the kubeconfig twice
+# and a drained pipe reads as empty, i.e. localhost:8080. =(…) is a 0600
+# temp file zsh deletes when the anonymous function returns.
+_kube_with_cfg() {
+  [[ -n $_KUBE_CFG ]] || { command "$@"; return }
+  local TMPPREFIX=${${TMPDIR:-/tmp}%/}/zsh
+  () { local f=$1; shift; KUBECONFIG=$f command "$@" } =(print -r -- "$_KUBE_CFG") "$@"
+}
+kubectl() { _kube_with_cfg kubectl "$@" }
+helm()    { _kube_with_cfg helm "$@" }
+cmctl()   { _kube_with_cfg cmctl "$@" }
+# make, with the kuse config as a real KUBECONFIG file, for Makefile targets
+# that call kubectl (make runs the binary, never the function above). Not a
+# `make` override: that would hand the admin config to every make in every
+# repo while kuse is active.
+kmake()   { _kube_with_cfg make "$@" }
 
 # Show the effective config `k` will use.
 kconfig() {
   print "cluster:    ${KUBE_CLUSTER:-<none>} (kuse)"
   print "image:      $KUBE_IMAGE"
-  print "kubeconfig: $KUBECONFIG_FILE$([[ -f $KUBECONFIG_FILE ]] || print ' (MISSING)')"
+  if [[ -n $_KUBE_CFG ]]; then
+    print "kubeconfig: <in memory> (kuse; kubectl/helm/k read it)"
+  else
+    print "kubeconfig: $KUBECONFIG_FILE$([[ -f $KUBECONFIG_FILE ]] || print ' (MISSING)')"
+  fi
   print "namespace:  ${KUBE_NAMESPACE:-<context default>}"
   print "sops key:   ${${SOPS_AGE_KEY_CMD:+$SOPS_AGE_KEY_CMD}:-<none>}"
   [[ -n $KUBE_CLUSTER ]] && { _kube_load; print "registries: ${KUBE_REGISTRIES[$KUBE_CLUSTER]:-<none>} (registry-login)" }
@@ -65,9 +97,16 @@ kconfig() {
 
 # kuse — render a cluster's kubeconfig from 1Password into this shell only.
 #
-#   kuse prod      render, then point KUBECONFIG and `k` at it
+#   kuse prod      render it into this shell for kubectl, helm and `k`
 #   kuse           pick one with fzf (prints the active cluster without a tty)
-#   kuse -         forget it and delete the rendered file
+#   kuse -         forget it
+#
+# The config is held in a non-exported shell variable, not a long-lived
+# file: the kubectl/helm/k wrappers above hand it to each call. A rendered
+# file in $TMPDIR kept vanishing mid-session (kubectl falling back to
+# localhost:8080 between two commands); a variable can't be lost that way.
+# Tools that need a real path (k9s, Makefiles reading $KUBECONFIG) do not
+# see it.
 #
 # Template: ~/.kube/<name>.tpl if present, else kube/config.tpl in this repo.
 # Where each cluster lives comes from `kclusters sync`, which writes
@@ -103,9 +142,8 @@ kuse() {
     [[ -n $name ]] || return 0
   fi
   if [[ $name == - ]]; then
-    _kube_forget
     _kube_sops ""
-    unset KUBECONFIG KUBE_CLUSTER
+    unset _KUBE_CFG KUBECONFIG KUBE_CLUSTER
     KUBECONFIG_FILE=$HOME/.kube/config
     return
   fi
@@ -129,35 +167,27 @@ kuse() {
   [[ -f $tpl ]] || tpl=$KUBE_TEMPLATE
   [[ -f $tpl ]] || { print -u2 "kuse: no template: $tpl"; return 1 }
 
-  # One 0700 dir per shell, removed on exit, so tokens never outlive the
-  # shell or leak into a sibling one. $TMPDIR is under /var/folders, which
-  # Docker Desktop shares by default, so `k` can still mount the file.
-  if [[ ! -d $_KUBE_DIR ]]; then
-    _kube_sweep
-    _KUBE_DIR=$(mktemp -d "${${TMPDIR:-/tmp}%/}/kube.$$.XXXXXX") || return
-  fi
-  local out=$_KUBE_DIR/$name.yaml in=$_KUBE_DIR/.$name.tpl body rc=0
+  # Files left by the old file-based kuse still hold tokens; clear them.
+  _kube_sweep
+
+  local body cfg rc=0
   body=$(<$tpl) || return
-  # __NAME__ is filled in before op runs, so secrets never pass through zsh.
+  # __NAME__ is filled in before op runs; the secrets only ever land in cfg.
   # op wants -i or a pipe; it reads a here-string as empty stdin.
-  print -r -- "${body//__NAME__/$name}" >| $in || return
-  ( umask 077
-    KUBE_OP_VAULT=$vault KUBE_OP_ITEM=$item \
-      op inject -f -i "$in" -o "$out" >/dev/null ) || rc=$?
-  rm -f -- "$in"
-  # Verify the render produced a non-empty file BEFORE pointing KUBECONFIG at
-  # it. op inject has been seen to exit 0 without writing (locked 1Password,
-  # a flaky s.sock) — exporting a path to a missing file then surfaces far
-  # away as `docker run … -v $KUBECONFIG` turning /kc.yaml into a directory
-  # ("is a directory") in some unrelated Makefile. Fail here, at the cause.
-  if (( rc )) || [[ ! -s $out ]]; then
-    rm -f -- "$out"
-    print -u2 "kuse: could not render $vault/$item — is 1Password unlocked? KUBECONFIG unchanged."
+  cfg=$(print -r -- "${body//__NAME__/$name}" |
+    KUBE_OP_VAULT=$vault KUBE_OP_ITEM=$item op inject) || rc=$?
+  # op inject has been seen to exit 0 with nothing to show for it (locked
+  # 1Password, a flaky s.sock). Keep the previous cluster rather than switch
+  # to an empty config that kubectl silently reads as localhost:8080.
+  if (( rc )) || [[ -z ${cfg//[[:space:]]/} ]]; then
+    print -u2 "kuse: could not render $vault/$item — is 1Password unlocked? ${KUBE_CLUSTER:-nothing} still active."
     return 1
   fi
 
-  export KUBECONFIG=$out KUBE_CLUSTER=$name
-  KUBECONFIG_FILE=$out
+  typeset -g _KUBE_CFG=$cfg
+  export KUBE_CLUSTER=$name
+  # A KUBECONFIG left by the old file-based kuse points at a deleted file.
+  [[ $KUBECONFIG == */kube.<->.*/*.yaml ]] && unset KUBECONFIG
   _kube_sops "${KUBE_SOPS[$name]}"
 }
 
@@ -175,8 +205,8 @@ _kube_sops() {
   export SOPS_AGE_KEY_CMD=$_KUBE_SOPS_CMD
 }
 
-# zshexit does not run when a shell is killed, so the next kuse clears dirs
-# whose owning shell (the pid in the name) is gone.
+# Removes token files the old file-based kuse left behind in $TMPDIR, skipping
+# dirs whose shell (the pid in the name) is still alive.
 _kube_sweep() {
   local d pid
   for d in ${${TMPDIR:-/tmp}%/}/kube.<->.*(N/); do
@@ -213,22 +243,6 @@ _kube_pick() {
     --prompt="kube> " --header="active: ${KUBE_CLUSTER:-none}") || return 1
   print -r -- ${choice%% *}
 }
-
-_kube_forget() {
-  [[ -d $_KUBE_DIR ]] || return 0
-  rm -f -- $_KUBE_DIR/*.yaml(N)
-  rmdir -- $_KUBE_DIR 2>/dev/null
-  unset _KUBE_DIR
-}
-
-# A subshell that calls `exit` runs the parent's zshexit hooks too ($$ is
-# inherited), which deleted the live kubeconfig mid-session. Only the shell
-# that owns the dir may clean it up.
-_kube_exit() { [[ $sysparams[pid] == $$ ]] && _kube_forget }
-
-zmodload zsh/system
-autoload -Uz add-zsh-hook
-add-zsh-hook zshexit _kube_exit
 
 _kuse() {
   local -a names

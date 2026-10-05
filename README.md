@@ -667,7 +667,7 @@ kclusters sync   # find kube-* items in every vault, write the map (-n: preview)
 kclusters        # list what is mapped (offline)
 kuse acme-prod         # render + switch; tab-completes from the map
 kuse             # fzf picker (active one marked; Esc keeps it)
-kuse -           # forget it, delete the file
+kuse -           # forget it
 ```
 
 `kclusters sync` names each cluster `<vault>-<item minus kube->` (so
@@ -677,9 +677,11 @@ field, and writes `~/.private/kube-clusters.zsh` (0600) keyed by vault and item
 committed. It is Go (`cmd/kclusters`, stdlib only), built into
 `~/.cache/dotfiles/` on first run and whenever the source changes.
 
-`kuse` renders through `op inject` into a 0700 per-shell temp dir (0600 file)
-and points both `KUBECONFIG` and `k` at it. The file goes on `kuse -` or shell
-exit; dirs left by a killed shell are swept by the next `kuse`.
+`kuse` renders through `op inject` once, into a non-exported variable in that
+shell only. The `kubectl`, `helm` and `k` wrappers hand it to each call (a
+0600 temp file that lives as long as the command), so there is no long-lived
+file to go missing. `KUBECONFIG` is not set: tools that need a real path (k9s,
+a Makefile reading `$KUBECONFIG`) do not see the cluster.
 
 **SOPS keys per cluster.** Give a cluster's `kube-*` item an optional
 `sops-age-key` field holding an age identity, and `kuse` points sops at it:
