@@ -124,7 +124,7 @@ bin/                                        user scripts (added to $PATH)
 claude/                                     Claude Code settings + statusline + prompts
 docker/                                     Dockerfiles built by our tools (claude-review)
 docs/                                       Deep-dive docs for individual tools
-githooks/                                   global git hooks (core.hooksPath)
+githooks/                                   git hooks (not wired by default)
 gitconfig.private.example                   template for ~/.private/gitconfig
 ssh-config.example                          template for ~/.ssh/config (1Password agent)
 install.sh                                  idempotent symlink installer
@@ -854,15 +854,19 @@ mouse reporting until the remote app redraws. Matching is on whole words, so
 
 ## Git hooks
 
-Global `core.hooksPath = ~/.dotfiles/githooks`. Currently provides:
-
-- **pre-push**: runs `gitleaks detect` against the repo and blocks the push on
-  any finding. No-ops cleanly if `gitleaks` isn't installed.
+These hooks live in `githooks/` but are **not active by default** — there is no
+global `core.hooksPath` (it was dropped in `ce9561c` for a lefthook migration
+that was never finished). Nothing runs them until you opt a repo in:
 
 ```sh
-git push --no-verify                              # bypass once
-git config --local core.hooksPath .git/hooks      # disable for one repo
+git config core.hooksPath ~/.dotfiles/githooks    # enable for this repo
+git config --global core.hooksPath ~/.dotfiles/githooks   # or everywhere
 ```
+
+- **pre-push**: runs `gitleaks` and blocks the push on any finding. No-ops if
+  `gitleaks` isn't installed. Bypass once with `git push --no-verify`.
+- **pre-commit**: a lefthook dispatcher with no `lefthook.yml` present, so it
+  is currently a no-op (the old gofmt/go-vet hook was replaced in `ce9561c`).
 
 `.gitleaks.toml` allowlists `vim/pack/vendor/` — vendored plugin trees aren't
 audited.

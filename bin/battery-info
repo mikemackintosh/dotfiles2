@@ -15,8 +15,8 @@ pct=$(printf '%s' "$out" | grep -oE '[0-9]+%' | head -1)
 state=$(printf '%s' "$out" | awk -F';' '/InternalBattery/ {print $2}' | tr -d ' ')
 
 case $state in
-    *charging*)    glyph='⚡' ;;
     *discharging*) glyph='🔋' ;;
+    *charging*)    glyph='⚡' ;;
     *)             glyph='🔌' ;;
 esac
 

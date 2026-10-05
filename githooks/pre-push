@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # pre-push — scan the repo with gitleaks before allowing a push.
 #
-# Wired in globally via core.hooksPath in ~/.dotfiles/.gitconfig so it
-# applies to every repo. No-ops cleanly if gitleaks isn't installed.
+# NOT wired up by default: there is no global core.hooksPath (dropped in
+# ce9561c). Enable it for a repo (or globally) with:
+#   git config core.hooksPath ~/.dotfiles/githooks
+# No-ops cleanly if gitleaks isn't installed.
 #
 # Bypass once:   git push --no-verify
 # Disable for a single repo:

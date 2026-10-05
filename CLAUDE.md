@@ -82,9 +82,10 @@ launchd/                                  → LaunchAgent templates (rendered by
   dotfiles.image-audit.plist                weekly bin/image-audit --fix
 docs/                                     → per-tool deep-dive docs
   git-review.md, git-feature.md             ← start here to learn a tool
-githooks/                                 → global hooks (core.hooksPath)
-  pre-commit                                gofmt + go vet on staged .go files
-  pre-push                                  gitleaks on push
+githooks/                                 → git hooks (NOT wired by default —
+                                            no global core.hooksPath; see pitfalls)
+  pre-commit                                lefthook stub, no lefthook.yml → a no-op
+  pre-push                                  gitleaks (only if core.hooksPath is set)
 gitconfig.private.example                 → template for ~/.private/gitconfig
 ssh-config.example                        → template for ~/.ssh/config
 install.sh                                → idempotent symlink installer;
@@ -125,9 +126,11 @@ expected on machines that haven't run `brew bundle`.
 - `git tag` without `-m` errors because `[tag] gpgsign = true` makes
   every tag annotated/signed. Use `git branch backup/...` for
   ephemeral safety refs instead.
-- `gitleaks` runs on `git push`. False positives in vendored trees
-  are allowlisted in `.gitleaks.toml`; for a one-off, add a
-  `# gitleaks:allow` inline comment, never `--no-verify` silently.
+- `gitleaks` is available as a pre-push hook but is NOT active by
+  default — there is no global `core.hooksPath`. Enable it per repo with
+  `git config core.hooksPath ~/.dotfiles/githooks`. When active, false
+  positives in vendored trees are allowlisted in `.gitleaks.toml`; for a
+  one-off add a `# gitleaks:allow` comment, never `--no-verify` silently.
 - Docker is a hard dependency of half of `bin/`. Every docker-shim
   alias (`node`, `npm`, `python3`, `ruby`, …) plus `claude-in-docker`,
   `git-review`, `git-feature`, `codex-security` and the
@@ -162,9 +165,11 @@ expected on machines that haven't run `brew bundle`.
   versions ignore `SOPS_AGE_KEY_CMD` and fail with "no identity matched".
 - The docker shims inherit no host env; secrets reach a container only
   via `DOCKER_SHIM_ENV="NAME …"` (names, never values on argv).
-- `core.hooksPath = ~/.dotfiles/githooks` is global. If a repo
-  needs its own hooks (rare), opt out with:
-  `git config --local core.hooksPath .git/hooks`.
+- There is NO global `core.hooksPath` (dropped in ce9561c for a lefthook
+  migration that was never finished — no lefthook.yml exists, lefthook
+  isn't installed). So githooks/ runs nowhere by default. To use the
+  gitleaks pre-push, set it yourself: `git config core.hooksPath
+  ~/.dotfiles/githooks` (per repo, or `--global`).
 - `~/.config/1Password/ssh/agent.toml` is an ALLOWLIST, not a sort: once it
   exists the agent serves only the items listed. `bin/git-identity` writes
   it; hand-editing it to drop a key silently breaks every host using that
