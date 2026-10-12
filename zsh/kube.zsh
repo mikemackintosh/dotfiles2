@@ -77,6 +77,8 @@ cmctl()   { _kube_with_cfg cmctl "$@" }
 # `make` override: that would hand the admin config to every make in every
 # repo while kuse is active.
 kmake()   { _kube_with_cfg make "$@" }
+# Any other binary with the kuse config: `krun terraform plan`.
+krun()    { _kube_with_cfg "$@" }
 
 # Show the effective config `k` will use.
 kconfig() {
