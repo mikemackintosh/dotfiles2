@@ -633,27 +633,22 @@ kotlinc hello.kt -include-runtime -d hello.jar && kotlin hello.jar
 kotlinc -script build.kts
 ```
 
-### `k` — kubectl in Docker (`zsh/kube.zsh`)
+### `kuse`, `k` — kubectl against a cluster from 1Password (`zsh/kube.zsh`)
 
-`k` is a drop-in kubectl: runs the configured image with your kubeconfig mounted
-read-only and forwards all args. `kconfig` prints the effective settings.
+`kuse <name>` loads a cluster into **this shell only**. `k` is kubectl.
 
 ```sh
-k get pods
-k -n myapp rollout restart deployment myapp-web
-echo "$manifest" | k apply -f -
-kconfig                                       # show image / kubeconfig / namespace
+kuse prod                     # load (no args: fzf picker; `kuse -` forgets)
+k -n myapp get pods           # k = kubectl; helm and cmctl work too
+k -n myapp logs deploy/web --since=10m
+make k8s-deploy               # make's k8s-* targets get the cluster too
+kconfig                       # what is loaded
 ```
 
-Override per-machine in `zsh/private.zsh`, or per-repo with a direnv `.envrc`:
+The context sets no namespace, so pass `-n`. Other tabs need their own `kuse`.
 
-| Env var             | Default                          | Purpose                          |
-|---------------------|----------------------------------|----------------------------------|
-| `KUBE_IMAGE`        | `bitnami/kubectl:latest`         | container image                  |
-| `KUBECONFIG_FILE`   | `$HOME/.kube/config`             | kubeconfig, mounted RO           |
-| `KUBE_NAMESPACE`    | *(empty)*                        | default namespace (adds `-n`)    |
-| `KUBE_DOCKER_ARGS`  | *(array)*                        | extra `docker run` args          |
-| `KUBE_KUBECTL_ARGS` | *(array)*                        | extra kubectl args, prepended    |
+Rare: a script that calls kubectl itself cannot see the cluster, because kuse
+keeps it in memory. Run it with `kx`: `kx ./script.sh`.
 
 #### `kuse` + `kclusters` — per-cluster kubeconfig from 1Password
 
@@ -678,10 +673,10 @@ committed. It is Go (`cmd/kclusters`, stdlib only), built into
 `~/.cache/dotfiles/` on first run and whenever the source changes.
 
 `kuse` renders through `op inject` once, into a non-exported variable in that
-shell only. The `kubectl`, `helm` and `k` wrappers hand it to each call (a
-0600 temp file that lives as long as the command), so there is no long-lived
-file to go missing. `KUBECONFIG` is not set: tools that need a real path (k9s,
-a Makefile reading `$KUBECONFIG`) do not see the cluster.
+shell only. `k`, `kubectl`, `helm`, `cmctl` and `make k8s-*` hand it to each
+call (a 0600 temp file that lives as long as the command), so there is no
+long-lived file to go missing. `KUBECONFIG` is not set: a script that calls
+kubectl itself needs `kx ./script.sh`.
 
 **SOPS keys per cluster.** Give a cluster's `kube-*` item an optional
 `sops-age-key` field holding an age identity, and `kuse` points sops at it:

@@ -1,105 +1,58 @@
-# kube.zsh — run kubectl through a Docker image, no local kubectl needed.
+# kube.zsh — kubectl against the cluster `kuse` loaded into this shell.
 #
-# `k` is a drop-in kubectl: it runs the configured container image with your
-# kubeconfig mounted read-only and forwards every argument straight through.
+#   kuse prod                      load a cluster (below)
+#   k -n myapp get pods            k is kubectl; kubectl, helm, cmctl work too
+#   make k8s-deploy                so do make's k8s-* targets
+#   kx ./script.sh                 rare: a script that calls kubectl itself
 #
-#   k get pods
-#   k -n myapp rollout restart deployment myapp-web
-#   echo "$manifest" | k apply -f -
+# kuse keeps the config in a shell variable, not a file, so only this shell's
+# functions can see it. A child process (a script, make's own recipes) runs the real kubectl binary and finds no config: localhost:8080.
+# `kx <cmd>` runs <cmd> with KUBECONFIG pointing at a 0600 temp copy that lives
+# exactly as long as the command does, and every child of it inherits it.
 #
-# Everything is overridable via env vars, so it works across clusters/projects
-# without editing this file. Set them globally in zsh/private.zsh, or per-repo
-# with a direnv `.envrc` (direnv is already wired up in .zshrc):
-#
-#   KUBE_IMAGE         container image to run         (default: bitnami/kubectl:latest)
-#   KUBECONFIG_FILE    host kubeconfig, mounted RO    (default: $HOME/.kube/config)
-#   KUBE_NAMESPACE     default namespace, adds -n     (default: empty → kubeconfig/context default)
-#   KUBE_DOCKER_ARGS   extra `docker run` args        (array, e.g. (--network host))
-#   KUBE_KUBECTL_ARGS  extra kubectl args, prepended  (array, e.g. (--context prod))
-#
-# Example .envrc for the myapp repo:
-#   export KUBE_NAMESPACE=myapp
-#   export KUBECONFIG_FILE="$HOME/.kube/config"
-
-: ${KUBE_IMAGE:=bitnami/kubectl:latest}
-: ${KUBECONFIG_FILE:=$HOME/.kube/config}
-: ${KUBE_NAMESPACE:=}
-
-k() {
-  if ! command -v docker &>/dev/null; then
-    print -u2 "k: docker not found on PATH"
-    return 127
-  fi
-
-  if [[ -z $_KUBE_CFG && ! -f $KUBECONFIG_FILE ]]; then
-    print -u2 "k: kubeconfig not found: $KUBECONFIG_FILE"
-    print -u2 "   run kuse, or set KUBECONFIG_FILE to a valid path (env or .envrc)."
-    return 1
-  fi
-
-  # Build argv incrementally so unset/empty arrays contribute nothing
-  # (a quoted expansion of an unset array yields a stray "" in zsh).
-  local -a run_args kargs
-  [[ -n $KUBE_NAMESPACE ]]    && kargs+=(-n "$KUBE_NAMESPACE")
-  (( ${#KUBE_KUBECTL_ARGS} )) && kargs+=("${KUBE_KUBECTL_ARGS[@]}")
-  kargs+=("$@")
-
-  run_args=(run --rm -i)
-  (( ${#KUBE_DOCKER_ARGS} ))  && run_args+=("${KUBE_DOCKER_ARGS[@]}")
-  if [[ -n $_KUBE_CFG ]]; then
-    # kuse's config lives only in this shell, so hand it over by env NAME
-    # (value never on argv) and let the container write its own copy.
-    run_args+=(-e KUBE_CFG_DATA --entrypoint sh "$KUBE_IMAGE" -c
-      'f=$(mktemp) && printf %s "$KUBE_CFG_DATA" >"$f" && exec kubectl --kubeconfig "$f" "$@"' k)
-    KUBE_CFG_DATA=$_KUBE_CFG docker "${run_args[@]}" "${kargs[@]}"
-  else
-    run_args+=(-v "${KUBECONFIG_FILE}:/kc.yaml:ro" "$KUBE_IMAGE" --kubeconfig /kc.yaml)
-    docker "${run_args[@]}" "${kargs[@]}"
-  fi
-}
-
-# kuse keeps its kubeconfig in $_KUBE_CFG (not exported); these hand it to
-# one command at a time as KUBECONFIG, not --kubeconfig, because kubectl
-# rejects any flag before a plugin name (`kubectl cert-manager …`) and
-# plugins inherit the env. =(…), not <(…): helm reads the kubeconfig twice
-# and a drained pipe reads as empty, i.e. localhost:8080. =(…) is a 0600
-# temp file zsh deletes when the anonymous function returns.
-_kube_with_cfg() {
+# KUBECONFIG, not --kubeconfig, because kubectl rejects any flag before a
+# plugin name (`kubectl cert-manager …`) and plugins inherit the env.
+# =(…), not <(…): helm reads the kubeconfig twice and a drained pipe reads as
+# empty. =(…) is a temp file zsh deletes when the anonymous function returns.
+# With no cluster loaded, kx just runs the command.
+kx() {
+  (( $# )) || { print -u2 "usage: kx <command> [args]   e.g. kx ./script.sh"; return 2 }
   [[ -n $_KUBE_CFG ]] || { command "$@"; return }
   local TMPPREFIX=${${TMPDIR:-/tmp}%/}/zsh
   () { local f=$1; shift; KUBECONFIG=$f command "$@" } =(print -r -- "$_KUBE_CFG") "$@"
 }
-kubectl() { _kube_with_cfg kubectl "$@" }
-helm()    { _kube_with_cfg helm "$@" }
-cmctl()   { _kube_with_cfg cmctl "$@" }
-# make, with the kuse config as a real KUBECONFIG file, for Makefile targets
-# that call kubectl (make runs the binary, never the function above). Not a
-# `make` override: that would hand the admin config to every make in every
-# repo while kuse is active.
-kmake()   { _kube_with_cfg make "$@" }
-# Any other binary with the kuse config: `krun terraform plan`.
-krun()    { _kube_with_cfg "$@" }
+kubectl() { kx kubectl "$@" }
+helm()    { kx helm "$@" }
+cmctl()   { kx cmctl "$@" }
+# k is kubectl, with kubectl's completion.
+k()       { kubectl "$@" }
+(( $+functions[compdef] )) && compdef k=kubectl
+# make gets the config ONLY when a goal is a k8s-* target. Every other make
+# (tests, builds, any repo) gets no kubeconfig at all: handing the admin config
+# to all of them would be the opposite of keeping it in memory.
+make() {
+  if (( ${@[(I)k8s-*]} )); then kx make "$@"; else command make "$@"; fi
+}
+# krun: the same as kx, by the name used on the other machine (`krun terraform plan`).
+krun()    { kx "$@" }
 
-# Show the effective config `k` will use.
+# What kuse has loaded in this shell.
 kconfig() {
   print "cluster:    ${KUBE_CLUSTER:-<none>} (kuse)"
-  print "image:      $KUBE_IMAGE"
   if [[ -n $_KUBE_CFG ]]; then
-    print "kubeconfig: <in memory> (kuse; kubectl/helm/k read it)"
+    print "kubeconfig: <in memory> (k, kubectl, helm, cmctl, make k8s-*; other tools: kx)"
   else
-    print "kubeconfig: $KUBECONFIG_FILE$([[ -f $KUBECONFIG_FILE ]] || print ' (MISSING)')"
+    print "kubeconfig: ${KUBECONFIG:-$HOME/.kube/config} (no kuse cluster loaded)"
   fi
-  print "namespace:  ${KUBE_NAMESPACE:-<context default>}"
   print "sops key:   ${${SOPS_AGE_KEY_CMD:+$SOPS_AGE_KEY_CMD}:-<none>}"
   [[ -n $KUBE_CLUSTER ]] && { _kube_load; print "registries: ${KUBE_REGISTRIES[$KUBE_CLUSTER]:-<none>} (registry-login)" }
-  (( ${#KUBE_DOCKER_ARGS} ))  && print "docker args:  ${KUBE_DOCKER_ARGS[*]}"
-  (( ${#KUBE_KUBECTL_ARGS} )) && print "kubectl args: ${KUBE_KUBECTL_ARGS[*]}"
   return 0
 }
 
+
 # kuse — render a cluster's kubeconfig from 1Password into this shell only.
 #
-#   kuse prod      render it into this shell for kubectl, helm and `k`
+#   kuse prod      render it into this shell for k/kubectl, helm, make k8s-*
 #   kuse           pick one with fzf (prints the active cluster without a tty)
 #   kuse -         forget it
 #
@@ -107,8 +60,8 @@ kconfig() {
 # file: the kubectl/helm/k wrappers above hand it to each call. A rendered
 # file in $TMPDIR kept vanishing mid-session (kubectl falling back to
 # localhost:8080 between two commands); a variable can't be lost that way.
-# Tools that need a real path (k9s, Makefiles reading $KUBECONFIG) do not
-# see it.
+# Scripts that call kubectl themselves do not see it; run them with kx.
+# make's k8s-* targets get it from the make() wrapper above.
 #
 # Template: ~/.kube/<name>.tpl if present, else kube/config.tpl in this repo.
 # Where each cluster lives comes from `kclusters sync`, which writes
@@ -146,7 +99,6 @@ kuse() {
   if [[ $name == - ]]; then
     _kube_sops ""
     unset _KUBE_CFG KUBECONFIG KUBE_CLUSTER
-    KUBECONFIG_FILE=$HOME/.kube/config
     return
   fi
   if ! command -v op &>/dev/null; then
