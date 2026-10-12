@@ -14,8 +14,9 @@ because the answer differs per Mac and per repo:
    If that is a repo deploy key, auth succeeds and every push fails with
    `marked as read only`.
 
-`git-identity` answers both from a picker fed by `ssh-add -L`, and writes
-the answers to untracked, per-machine files. Public material only. It
+`git-identity` answers both from a picker fed by every SSH key in the vault
+(`op item list`, so keys `agent.toml` filters out still show, marked "vault
+only") plus `ssh-add -L`, and writes the answers to untracked, per-machine files. Public material only. It
 never touches `~/.ssh`.
 
 ## The two scopes
@@ -93,7 +94,9 @@ not registered under GitHub → Settings → SSH keys → Authentication.
 identity with the *name* of the key it signs with and whether the agent
 currently offers it, every overlay `includeIf` declares, `agent.toml`'s
 order, and any `IdentityFile` in `~/.ssh/config` that points at a file
-that is not there. Exit 1 on any of those.
+that is not there or at a key the agent does not serve (a pin left over
+from a previous key: ssh reads the `.pub` as a private key and fails with
+`UNPROTECTED PRIVATE KEY FILE`). Exit 1 on any of those.
 
 ## Two Macs, one 1Password account
 

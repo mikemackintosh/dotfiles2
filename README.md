@@ -54,8 +54,8 @@ step is useless until the one above it is true:
    have written `~/.config/1Password/ssh/agent.toml` by hand, a key outside
    the vaults it lists is invisible to the agent even though it is in your
    account. `ssh-add -l` lists exactly what the agent will offer.
-3. **`install.sh identity`** (or `git-identity base`). It lists the keys the
-   agent offers, asks which one signs and which one pushes, and writes
+3. **`install.sh identity`** (or `git-identity base`). It lists every SSH key in the
+   vault (via `op`; the agent alone hides what `agent.toml` filters), asks which one signs and which one pushes, and writes
    `~/.private/gitconfig`, `~/.config/1Password/ssh/agent.toml` and
    `allowed_signers` from the answers. Public material only; `~/.ssh` is never
    touched. `install.sh` offers this itself when it finds no identity or no

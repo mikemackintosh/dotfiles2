@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # git-identity — choose which 1Password SSH keys sign commits and push,
 # for this machine (base) or for repos under a path (overlay), from a
-# picker fed by what the agent actually offers.
+# picker fed by every SSH key in the vault (via `op`) plus what the agent
+# offers right now.
 #
 # Usage:
 #   git-identity                     interactive; asks base vs overlay
@@ -44,7 +45,32 @@ warn() { printf '    %swarn%s %s\n' "$yellow" "$reset" "$*" >&2; }
 die()  { printf '%serror%s %s\n' "$red" "$reset" "$*" >&2; exit 1; }
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/git-identity.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+trap 'spin_stop; rm -rf "$TMP"' EXIT
+
+# Spinner on stderr while op is slow. The label is re-read every tick from
+# $TMP/spin.msg, so a caller can update it (spin_msg) as work progresses.
+SPIN_PID=""
+spin_start() {   # LABEL
+    [[ -t 2 ]] || return 0
+    printf '%s' "$1" >"$TMP/spin.msg"
+    (
+        trap 'exit 0' TERM
+        frames='|/-\' i=0
+        while :; do
+            printf '\r    %s %s\033[K' "${frames:$(( i % 4 )):1}" "$(cat "$TMP/spin.msg" 2>/dev/null)" >&2
+            i=$(( i + 1 )); sleep 0.1
+        done
+    ) &
+    SPIN_PID=$!
+}
+spin_msg() { [[ -z $SPIN_PID ]] || printf '%s' "$1" >"$TMP/spin.msg"; }
+spin_stop() {
+    [[ -n $SPIN_PID ]] || return 0
+    kill "$SPIN_PID" 2>/dev/null || true
+    wait "$SPIN_PID" 2>/dev/null || true
+    SPIN_PID=""
+    printf '\r\033[K' >&2
+}
 
 # ------------------------------------------------------------- the agent
 
@@ -59,10 +85,22 @@ agent_sock() {
 }
 
 # Parallel arrays — the bash macOS ships has no associative arrays.
-K_TYPE=(); K_MAT=(); K_NAME=(); K_FP=(); K_BITS=()
+# K_SERVED is 1 when the agent offers the key now, 0 when only the vault has it.
+K_TYPE=(); K_MAT=(); K_NAME=(); K_FP=(); K_BITS=(); K_SERVED=(); K_VAULT=(); K_ID=()
 AGENT_ERR=""
+
+add_key() {   # TYPE MAT NAME SERVED VAULT ID
+    local fpline
+    printf '%s %s %s\n' "$1" "$2" "$3" >"$TMP/key.pub"
+    fpline="$(ssh-keygen -lf "$TMP/key.pub" 2>/dev/null || true)"
+    K_TYPE+=("$1"); K_MAT+=("$2"); K_NAME+=("${3:-(unnamed $1 key)}")
+    K_BITS+=("${fpline%% *}")
+    fpline=${fpline#* }; K_FP+=("${fpline%% *}")
+    K_SERVED+=("$4"); K_VAULT+=("$5"); K_ID+=("$6")
+}
+
 load_keys() {
-    K_TYPE=(); K_MAT=(); K_NAME=(); K_FP=(); K_BITS=(); AGENT_ERR=""
+    K_TYPE=(); K_MAT=(); K_NAME=(); K_FP=(); K_BITS=(); K_SERVED=(); K_VAULT=(); K_ID=(); AGENT_ERR=""
     if ! agent_sock; then
         AGENT_ERR="no 1Password agent socket — 1Password → Settings → Developer → Use the SSH agent"
         return 1
@@ -71,24 +109,97 @@ load_keys() {
     out="$(SSH_AUTH_SOCK=$SOCK ssh-add -L 2>&1)" || rc=$?
     if (( rc != 0 )); then
         case $out in
-            *"no identities"*) AGENT_ERR="agent is up but offers no keys — unlock 1Password, or agent.toml names nothing that exists" ;;
+            *"no identities"*) AGENT_ERR="agent is up but offers no keys — unlock 1Password, or agent.toml matches no item (renamed or deleted? rerun: git-identity base)" ;;
             *) AGENT_ERR="cannot talk to the agent (${out:-exit $rc}) — unlock or restart 1Password" ;;
         esac
         return 1
     fi
-    local line type rest mat name fpline
+    local line type rest mat name
     while IFS= read -r line; do
         [[ -n $line ]] || continue
         type=${line%% *}; rest=${line#* }
         if [[ $rest == *" "* ]]; then mat=${rest%% *}; name=${rest#* }
         else mat=$rest; name=""; fi
-        printf '%s %s %s\n' "$type" "$mat" "$name" >"$TMP/key.pub"
-        fpline="$(ssh-keygen -lf "$TMP/key.pub" 2>/dev/null || true)"
-        K_TYPE+=("$type"); K_MAT+=("$mat"); K_NAME+=("${name:-(unnamed $type key)}")
-        K_BITS+=("${fpline%% *}")
-        fpline=${fpline#* }; K_FP+=("${fpline%% *}")
+        add_key "$type" "$mat" "$name" 1 "" ""
     done <<<"$out"
     (( ${#K_TYPE[@]} > 0 ))
+}
+
+# agent.toml filters the agent, so it can only show keys already allowed.
+# The vault is the full list. Adds what the agent lacks, and fills in the
+# vault of keys it has. Needs op + jq and a CLI session; without them the
+# picker falls back to agent keys only.
+VAULT_ERR=""
+load_vault_keys() {
+    VAULT_ERR=""
+    command -v op >/dev/null 2>&1 || { VAULT_ERR="no op CLI"; return 1; }
+    command -v jq >/dev/null 2>&1 || { VAULT_ERR="no jq"; return 1; }
+    # No `op signin` first: with the app's CLI integration op authenticates
+    # itself, and signin costs ~2s for nothing. Without it, list fails and
+    # the picker falls back to agent keys.
+    spin_start "reading 1Password vault"
+    if ! command op item list --categories 'SSH Key' --format json >"$TMP/vault-list.json" 2>"$TMP/vault.err"; then
+        spin_stop
+        VAULT_ERR="op item list failed: $(tail -n1 "$TMP/vault.err")"; return 1
+    fi
+    if ! jq -r '.[] | [.id, .vault.name, .title] | @tsv' "$TMP/vault-list.json" >"$TMP/vault.tsv" 2>"$TMP/vault.err"; then
+        spin_stop
+        VAULT_ERR="could not parse op output: $(tail -n1 "$TMP/vault.err")"; return 1
+    fi
+    # One field per item, by id: the whole item (--format json) carries the
+    # private key, and `op item get -` takes a redirected file as an item
+    # named "-". Fetched in parallel (~1s instead of ~0.6s each); an item op
+    # cannot decode is skipped, not fatal.
+    local id vault title pub type mat idx n=0 total done_n pids=()
+    total=$(grep -c . "$TMP/vault.tsv" || true)
+    mkdir -p "$TMP/pk"
+    while IFS=$'\t' read -r id vault title; do
+        [[ -n $id ]] || continue
+        n=$(( n + 1 ))
+        ( command op item get "$id" --fields 'label=public key' >"$TMP/pk/$n" 2>/dev/null
+          echo $? >"$TMP/pk/$n.rc" ) &
+        pids+=($!)
+    done <"$TMP/vault.tsv"
+    local ticks=0
+    while :; do
+        done_n=$(find "$TMP/pk" -name '*.rc' | grep -c . || true)
+        spin_msg "reading SSH keys from 1Password  $done_n/$total"
+        (( done_n >= total )) && break
+        # A stuck op (an approval nobody clicks) must not hang the picker.
+        if (( ++ticks > 600 )); then
+            spin_stop
+            VAULT_ERR="op did not answer within 60s (a 1Password approval waiting?)"; return 1
+        fi
+        sleep 0.1
+    done
+    # Only the fetches: a bare `wait` also waits on the spinner, forever.
+    (( ${#pids[@]} == 0 )) || wait "${pids[@]}" 2>/dev/null || true
+    spin_stop
+
+    VAULT_SKIPPED=()
+    n=0
+    while IFS=$'\t' read -r id vault title; do
+        [[ -n $id ]] || continue
+        n=$(( n + 1 ))
+        pub="$(cat "$TMP/pk/$n")"
+        if [[ $(cat "$TMP/pk/$n.rc") != 0 ]] || [[ $pub != ssh-* && $pub != ecdsa-* && $pub != sk-* ]]; then
+            VAULT_SKIPPED+=("$title")
+            continue
+        fi
+        type=${pub%% *}; mat=${pub#* }; mat=${mat%% *}
+        if idx="$(key_index "$mat")"; then
+            K_VAULT[$idx]=$vault; K_ID[$idx]=$id
+        else
+            add_key "$type" "$mat" "$title" 0 "$vault" "$id"
+        fi
+    done <"$TMP/vault.tsv"
+}
+VAULT_SKIPPED=()
+
+unserved_count() {
+    local i n=0
+    for (( i = 0; i < ${#K_SERVED[@]}; i++ )); do (( K_SERVED[i] )) || n=$(( n + 1 )); done
+    echo "$n"
 }
 
 short_type() {
@@ -116,9 +227,24 @@ name_is_dup() {
     (( n > 1 ))
 }
 
+# Item titles agent.toml lists. An ID entry carries its title as a trailing
+# comment; that comment can go stale after a rename, the ID cannot.
 toml_items() {
     [[ -f $AGENT_TOML ]] || return 0
-    sed -n 's/^[[:space:]]*item[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$AGENT_TOML"
+    sed -n -e 's/^[[:space:]]*item[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*#[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' \
+           -e 't' \
+           -e 's/^[[:space:]]*item[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$AGENT_TOML"
+}
+
+toml_ids() {
+    [[ -f $AGENT_TOML ]] || return 0
+    sed -n 's/^[[:space:]]*item[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$AGENT_TOML"
+}
+
+# Is key $1 (index) in agent.toml, by ID or by title?
+toml_lists() {
+    { [[ -n ${K_ID[$1]} ]] && toml_ids | grep -qxF "${K_ID[$1]}"; } \
+        || toml_items | grep -qxF "${K_NAME[$1]}"
 }
 
 # ------------------------------------------------------ current config
@@ -174,16 +300,22 @@ have_fzf() { command -v fzf >/dev/null 2>&1; }
 # One preview file per key, so fzf's preview is a plain `cat`.
 write_previews() {
     mkdir -p "$TMP/preview"
-    local i uses listed
+    local i uses listed served
     for (( i = 0; i < ${#K_TYPE[@]}; i++ )); do
         uses="$(uses_of "${K_MAT[$i]}")"
         if [[ -f $AGENT_TOML ]]; then
-            if toml_items | grep -qxF "${K_NAME[$i]}"; then listed="listed"; else listed="NOT listed (agent will drop it on reload)"; fi
+            if toml_lists "$i"; then listed="listed"
+            elif (( K_SERVED[i] )); then listed="NOT listed (agent will drop it on reload)"
+            else listed="not listed"; fi
         else listed="no agent.toml — every vault key is offered"; fi
+        if (( K_SERVED[i] )); then served="serving now"
+        else served="vault only — served once agent.toml lists it and 1Password reloads"; fi
         {
             printf '%s%s%s\n\n' "$bold" "${K_NAME[$i]}" "$reset"
             printf 'type         %s (%s bits)\n' "$(short_type "${K_TYPE[$i]}")" "${K_BITS[$i]}"
             printf 'fingerprint  %s\n' "${K_FP[$i]}"
+            [[ -n ${K_VAULT[$i]} ]] && printf 'vault        %s\n' "${K_VAULT[$i]}"
+            printf 'agent        %s\n' "$served"
             printf 'agent.toml   %s\n' "$listed"
             printf 'used by      %s\n' "${uses:-nothing yet}"
             name_is_dup "${K_NAME[$i]}" && printf '\n%sduplicate title%s — agent.toml needs vault = "…" to tell them apart\n' "$yellow" "$reset"
@@ -241,10 +373,11 @@ pick_select() {
     printf '%s\n' "${chosen[@]-}" | grep -v '^$' || true
 }
 
-key_lines() {   # "idx<TAB>name   type" for every agent key
+key_lines() {   # "idx<TAB>name   type   [vault only]" for every key
     local i
     for (( i = 0; i < ${#K_TYPE[@]}; i++ )); do
-        printf '%s\t%-34s %s\n' "$i" "${K_NAME[$i]}" "$(short_type "${K_TYPE[$i]}")"
+        printf '%s\t%-34s %-8s %s\n' "$i" "${K_NAME[$i]}" "$(short_type "${K_TYPE[$i]}")" \
+            "$( (( K_SERVED[i] )) || echo 'vault only')"
     done
 }
 
@@ -351,8 +484,16 @@ write_toml() {   # ordered indices...
         printf '# unlock 1Password, or restart it. Regenerate: git-identity base\n'
         local i
         for i in "$@"; do
+            # By ID when op gave one: a title entry stops matching the moment
+            # the item is renamed, and 1Password ignores a non-match silently,
+            # so the agent just goes empty. The title rides along as a comment.
+            if [[ -n ${K_ID[$i]} ]]; then
+                printf '\n[[ssh-keys]]\nitem = "%s"   # %s\n' "${K_ID[$i]}" "${K_NAME[$i]}"
+                continue
+            fi
             printf '\n[[ssh-keys]]\nitem = "%s"\n' "${K_NAME[$i]}"
-            name_is_dup "${K_NAME[$i]}" && printf '# vault = "…"   # duplicate title — name the vault\n'
+            if [[ -n ${K_VAULT[$i]} ]]; then printf 'vault = "%s"\n' "${K_VAULT[$i]}"
+            elif name_is_dup "${K_NAME[$i]}"; then printf '# vault = "…"   # duplicate title — name the vault\n'; fi
         done
     } >"$AGENT_TOML"
     chmod 600 "$AGENT_TOML"
@@ -471,7 +612,7 @@ cmd_status() {
         while IFS= read -r item; do
             [[ -n $item ]] || continue
             if (( ${#K_NAME[@]} )) && ! printf '%s\n' "${K_NAME[@]}" | grep -qxF "$item"; then
-                warn "agent.toml lists \"$item\" but the agent does not offer it"; missing=1
+                warn "agent.toml lists \"$item\" but the agent does not offer it (renamed or deleted?)"; missing=1
             fi
         done < <(toml_items)
         (( missing )) && failed=1
@@ -495,7 +636,13 @@ cmd_status() {
         local pub
         while IFS= read -r pub; do
             pub=${pub/#\~/$HOME}
-            [[ -r $pub ]] || { warn "~/.ssh/config names $pub, which does not exist — with IdentitiesOnly that blocks every push"; failed=1; }
+            [[ -r $pub ]] || { warn "~/.ssh/config names $pub, which does not exist — with IdentitiesOnly that blocks every push"; failed=1; continue; }
+            # A pin left behind after switching keys: ssh cannot find it in
+            # the agent, falls back to reading the .pub as a private key, and
+            # fails with "UNPROTECTED PRIVATE KEY FILE".
+            if (( ${#K_MAT[@]} )) && ! key_index "$(cut -d' ' -f2 "$pub")" >/dev/null; then
+                warn "~/.ssh/config pins $pub, a key the agent does not serve — re-pin it, or drop the pin and let agent.toml decide"; failed=1
+            fi
         done < <(sed -n 's/^[[:space:]]*IdentityFile[[:space:]]*//p' "$HOME/.ssh/config")
     fi
 
@@ -506,13 +653,22 @@ cmd_pick() {   # SCOPE [DIR]
     local scope=${1:-} dir=${2:-}
     [[ -t 0 && -t 1 ]] || die "interactive; run it from a terminal (status/list work without one)"
     load_keys || die "$AGENT_ERR"
+    local served=${#K_TYPE[@]}
+    load_vault_keys || true
     write_previews
 
     step "Identity picker"
-    info "1Password agent offers ${#K_TYPE[@]} keys"
-    if [[ -f $AGENT_TOML ]]; then
-        info "agent.toml is filtering: only its $(toml_items | grep -c .) item(s) are visible. To pick"
-        info "  from everything, move it aside and lock/unlock 1Password first."
+    info "1Password agent offers $served keys"
+    if [[ -z $VAULT_ERR ]]; then
+        info "vault has $(unserved_count) more the agent is not serving (agent.toml filters them)"
+        local t
+        for t in "${VAULT_SKIPPED[@]-}"; do
+            [[ -n $t ]] && warn "skipped \"$t\": op could not read its public key (broken item?)"
+        done
+    elif [[ -f $AGENT_TOML ]]; then
+        info "could not read the vault ($VAULT_ERR), and agent.toml is filtering:"
+        info "  only its $(toml_items | grep -c .) item(s) are visible. To pick from everything,"
+        info "  sign in with op, or move agent.toml aside and lock/unlock 1Password."
     fi
     have_fzf || info "(no fzf yet — numbered menus instead)"
 
@@ -570,20 +726,25 @@ cmd_pick() {   # SCOPE [DIR]
     local order=()
     if [[ $scope == base ]]; then
         order=("$a"); [[ $a != "$s" ]] && order+=("$s")
-        local others=() i
+        local others=() extra=() i keep
         for (( i = 0; i < ${#K_TYPE[@]}; i++ )); do
-            [[ $i == "$a" || $i == "$s" ]] || others+=("$i")
+            [[ $i == "$a" || $i == "$s" ]] && continue
+            if (( K_SERVED[i] )); then others+=("$i"); else extra+=("$i"); fi
         done
         if (( ${#others[@]} )); then
             echo
-            if confirm "Keep the other ${#others[@]} key(s) available on this machine?" y; then
+            if confirm "Keep the other ${#others[@]} key(s) the agent serves now?" y; then
                 order+=("${others[@]}")
             else
-                local keep
                 keep="$(for i in "${others[@]}"; do key_lines | grep "^$i"$'\t'; done \
                     | pick "Which OTHER keys may this Mac's agent offer? (TAB marks, Enter confirms; none is fine)" "keep" multi || true)"
                 [[ -n $keep ]] && while IFS= read -r i; do order+=("$i"); done <<<"$keep"
             fi
+        fi
+        if (( ${#extra[@]} )) && confirm "Also serve any of the ${#extra[@]} vault-only key(s)?" n; then
+            keep="$(for i in "${extra[@]}"; do key_lines | grep "^$i"$'\t'; done \
+                | pick "Which vault keys should the agent start offering? (TAB marks, Enter confirms)" "add" multi || true)"
+            [[ -n $keep ]] && while IFS= read -r i; do order+=("$i"); done <<<"$keep"
         fi
     fi
 
@@ -595,13 +756,18 @@ cmd_pick() {   # SCOPE [DIR]
         info "  user.signingkey  ${K_NAME[$s]}"
         info "$AGENT_TOML"
         for i in "${order[@]}"; do info "  ${K_NAME[$i]}"; done
-        info "  ${dim}(${#K_TYPE[@]} keys offered now → ${#order[@]} after 1Password reloads)${reset}"
+        info "  ${dim}($served keys offered now → ${#order[@]} after 1Password reloads)${reset}"
     else
         info "$file_tilde  (includeIf gitdir:$dir)"
         info "  user.name        $name"
         info "  user.email       $email"
         info "  user.signingkey  ${K_NAME[$s]}"
         [[ -n $a ]] && info "  core.sshCommand  IdentitiesOnly + ~/.private/$label.pub (${K_NAME[$a]})"
+        # Overlays never write agent.toml, so a key it does not list stays unserved.
+        for i in $s $a; do
+            (( K_SERVED[i] )) || toml_lists "$i" \
+                || warn "${K_NAME[$i]} is not in agent.toml, so the agent will not serve it — add it with: git-identity base"
+        done
     fi
     info "$SIGNERS  += $email"
     echo
@@ -619,6 +785,11 @@ cmd_pick() {   # SCOPE [DIR]
     step "Proving it"
     if [[ -n ${GIT_IDENTITY_SKIP_PROOFS:-} ]]; then
         info "skipped (GIT_IDENTITY_SKIP_PROOFS)"
+    elif ! (( K_SERVED[s] )) || ! (( K_SERVED[${a:-$s}] )); then
+        # The agent cannot sign with a key it is not serving yet; testing
+        # now would report a good key as broken.
+        info "skipped: the agent does not serve the chosen key(s) until 1Password reloads."
+        info "After lock/unlock, prove it with: ssh -T git@github.com"
     else
         info "1Password will ask you to approve one signature."
         verify_sign "$s" || true
