@@ -757,8 +757,9 @@ nothing renders as tofu. Every other shape needs a Nerd Font — see the
 Brewfile.
 
 Densities: `full` is everything including the weather/battery/now-playing HUD;
-`lean` drops the HUD and keeps git, duration and clock; `zen` is user, dir and
-branch only.
+`lean` drops the HUD and keeps git, duration and clock; `zen` is user, dir,
+branch and cluster only. The cluster segment (k8s blue in every theme) appears
+while `kuse` has one loaded, so you can see what `k` will hit.
 
 Adding a theme takes one function. Any `_zp_palette_<name>` in
 `zsh/prompt-themes.zsh` is discovered by name — no list to update. It may set

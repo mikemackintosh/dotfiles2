@@ -289,10 +289,11 @@ _zp_apply_shape() {
     # segment icons have to go too — otherwise it trades box-drawing tofu
     # for icon tofu.
     if [[ $s == ascii ]]; then
-        _ZP_GIT='git'; _ZP_CLOCK='at'; _ZP_BRAIN='mem'; _ZP_TIMER='took'
+        _ZP_GIT='git'; _ZP_CLOCK='at'; _ZP_BRAIN='mem'; _ZP_TIMER='took'; _ZP_KUBE='k8s'
     else
         _ZP_GIT=$_ZP_ICON_GIT;     _ZP_CLOCK=$_ZP_ICON_CLOCK
         _ZP_BRAIN=$_ZP_ICON_BRAIN; _ZP_TIMER=$_ZP_ICON_TIMER
+        _ZP_KUBE=$_ZP_ICON_KUBE
     fi
 }
 

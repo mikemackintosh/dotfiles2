@@ -148,12 +148,14 @@ typeset -g _ZP_GIT=$''  # git branch
 typeset -g _ZP_CLOCK=$''  # fa-clock-o
 typeset -g _ZP_BRAIN=$''  # fa-bookmark
 typeset -g _ZP_TIMER=$''  # fa-hourglass-half — last cmd duration
+typeset -g _ZP_KUBE=$'\U000F10FE'  # md-kubernetes — kuse cluster
 
 # Caps and separators now come from the shape (prompt-themes.zsh); these are
 # the per-segment icons. Stashed so the ascii shape can swap them out and
 # every other shape can put them back.
 typeset -g _ZP_ICON_GIT=$_ZP_GIT _ZP_ICON_CLOCK=$_ZP_CLOCK
 typeset -g _ZP_ICON_BRAIN=$_ZP_BRAIN _ZP_ICON_TIMER=$_ZP_TIMER
+typeset -g _ZP_ICON_KUBE=$_ZP_KUBE
 _zp_init_theme
 
 # Command-duration timing: preexec captures start, precmd computes elapsed.
@@ -307,8 +309,12 @@ _zp_render() {
     _zp_seg $_ZP_USER_BG $_ZP_USER_FG " %n "
     _zp_seg $_ZP_DIR_BG  $_ZP_DIR_FG  " %(3c.…/%2~.%~) "
     [[ -n $_ZP_BRANCH ]] && _zp_seg $_ZP_GIT_BG $_ZP_GIT_FG " ${_ZP_GIT} ${_ZP_BRANCH} "
+    # Which cluster k/kubectl/helm will hit. Every density, and a fixed color
+    # rather than a palette slot, so it reads the same in every theme.
+    [[ -n $KUBE_CLUSTER && -n $_KUBE_CFG ]] &&
+        _zp_seg '#326ce5' '#ffffff' " ${_ZP_KUBE} ${KUBE_CLUSTER//\%/%%} "
 
-    # zen keeps only who/where/which-branch. lean adds the working segments
+    # zen keeps only who/where/which-branch/cluster. lean adds the working segments
     # but no HUD. full is everything.
     if [[ $_ZP_DENSITY != zen ]]; then
         (( _ZP_MEM > 0 )) && _zp_seg $_ZP_BRAIN_BG $_ZP_BRAIN_FG " ${_ZP_BRAIN} ${_ZP_MEM} "
