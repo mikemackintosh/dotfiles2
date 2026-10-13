@@ -55,6 +55,7 @@ kconfig() {
 #   kuse prod      render it into this shell for k/kubectl, helm, make k8s-*
 #   kuse           pick one with fzf (prints the active cluster without a tty)
 #   kuse -         forget it
+#   kuse -w [prod] write ./.kuse (default: the active cluster, else pick) and load it
 #
 # The config is held in a non-exported shell variable, not a long-lived
 # file: the kubectl/helm/k wrappers above hand it to each call. A rendered
@@ -88,6 +89,24 @@ _kube_load() { KUBE_SOPS=() KUBE_REGISTRIES=(); [[ -r $KUBE_CLUSTERS_FILE ]] && 
 
 kuse() {
   local name=$1
+  # A cluster you pick by hand is yours: leaving a .kuse dir won't forget it.
+  unset _KUBE_AUTO_NAME
+  if [[ $name == -w ]]; then
+    name=${2:-$KUBE_CLUSTER}
+    if [[ -z $name ]]; then
+      [[ -t 0 && -t 1 ]] && command -v fzf &>/dev/null && name=$(_kube_pick)
+      [[ -n $name ]] || { print -u2 "usage: kuse -w <name>   (no cluster active to write)"; return 2 }
+    fi
+    [[ $name == - ]] && { print -u2 "kuse: -w needs a cluster, not -"; return 2 }
+    _kube_known $name || { print -u2 "kuse: unknown cluster '$name' (kclusters sync?)"; return 1 }
+    print -r -- $name > .kuse || return
+    print -u2 "kuse: wrote $name to ./.kuse"
+    # Re-run the hook to load it; mark it this dir's even if it was already active.
+    unset _KUBE_AUTO_SEEN
+    _kube_auto
+    [[ $KUBE_CLUSTER == $name ]] && typeset -g _KUBE_AUTO_NAME=$name
+    return 0
+  fi
   if [[ -z $name ]]; then
     if [[ ! -t 0 || ! -t 1 ]] || ! command -v fzf &>/dev/null; then
       print "${KUBE_CLUSTER:-<none>}${KUBECONFIG:+  ($KUBECONFIG)}"
@@ -202,6 +221,57 @@ _kuse() {
   local -a names
   _kube_load
   names=(${(k)KUBE_CLUSTERS} ${(k)KUBE_SYNCED} $HOME/.kube/*.tpl(N:t:r))
-  compadd -- - ${(u)names}
+  compadd -- - -w ${(u)names}
 }
 (( $+functions[compdef] )) && compdef _kuse kuse
+
+# .kuse — a project names its cluster; cd'ing in loads it.
+#
+#   kuse -w acme-prod              writes ./.kuse (nearest one up wins)
+#
+# Entering a tree with a different .kuse switches to its cluster; leaving
+# for a dir with none forgets it, unless you've since run kuse by hand.
+# Only names already in the map (or ~/.kube/<name>.tpl) load: a cloned
+# repo can't point kuse at an arbitrary vault item. Each .kuse is acted on
+# once per entry, so a locked 1Password doesn't re-prompt on every cd.
+_kube_auto() {
+  local d=$PWD f=
+  while :; do
+    [[ -f $d/.kuse ]] && { f=$d/.kuse; break }
+    [[ $d == / ]] && break
+    d=${d:h}
+  done
+  [[ $f == $_KUBE_AUTO_SEEN ]] && return 0
+  typeset -g _KUBE_AUTO_SEEN=$f
+
+  if [[ -z $f ]]; then
+    [[ -n $_KUBE_AUTO_NAME && $KUBE_CLUSTER == $_KUBE_AUTO_NAME ]] || return 0
+    print -u2 "kuse: left ${_KUBE_AUTO_NAME}'s .kuse; forgetting it"
+    kuse -
+    return 0
+  fi
+
+  local name where=${${f:h}/#$HOME/~}
+  local -a lines=(${(M)${(f)"$(<$f)"}:#[^#]*})
+  name=${lines[1]//[[:space:]]/}
+  [[ -n $name ]] || return 0
+  if ! _kube_known $name; then
+    print -u2 "kuse: $where/.kuse names unknown cluster '$name' (kclusters sync?)"
+    return 0
+  fi
+  [[ $KUBE_CLUSTER == $name && -n $_KUBE_CFG ]] && return 0
+  print -u2 "kuse: $name (from $where/.kuse)"
+  kuse $name && typeset -g _KUBE_AUTO_NAME=$name
+  return 0
+}
+
+# _kube_known <name> — in the map or has a ~/.kube/<name>.tpl.
+_kube_known() {
+  [[ $1 =~ '^[A-Za-z0-9._-]+$' ]] || return 1
+  _kube_load
+  (( $+KUBE_CLUSTERS[$1] || $+KUBE_SYNCED[$1] )) || [[ -f $HOME/.kube/$1.tpl ]]
+}
+autoload -Uz add-zsh-hook
+add-zsh-hook chpwd _kube_auto
+# chpwd doesn't fire for the dir a shell starts in (new tmux pane, sessionizer).
+[[ -o interactive ]] && _kube_auto

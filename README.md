@@ -647,6 +647,13 @@ kconfig                       # what is loaded
 
 The context sets no namespace, so pass `-n`. Other tabs need their own `kuse`.
 
+**Per project:** `kuse -w acme-prod` (or bare `kuse -w` for the active
+cluster) writes `.kuse` in the current dir; from then on `cd`-ing
+anywhere under that dir runs `kuse acme-prod` (also when a shell starts there).
+Leaving for a dir with no `.kuse` forgets it, unless you ran `kuse` by hand
+since. Only names already in the map or `~/.kube/<name>.tpl` load; anything
+else gets a warning.
+
 Rare: a script that calls kubectl itself cannot see the cluster, because kuse
 keeps it in memory. Run it with `kx`: `kx ./script.sh`.
 
