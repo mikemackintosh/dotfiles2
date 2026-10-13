@@ -84,6 +84,10 @@ kconfig() {
 typeset -gA KUBE_CLUSTERS KUBE_SYNCED KUBE_SOPS KUBE_REGISTRIES
 : ${KUBE_CLUSTERS_FILE:=$HOME/.private/kube-clusters.zsh}
 
+# exec zsh from a shell running the old file-based kuse keeps its exported
+# KUBECONFIG, pointing at a temp file that is gone; kx would hand it on.
+[[ $KUBECONFIG == */kube.<->.*/*.yaml && ! -s $KUBECONFIG ]] && unset KUBECONFIG
+
 # Reread on every use so a sync lands in shells that are already open.
 _kube_load() { KUBE_SOPS=() KUBE_REGISTRIES=(); [[ -r $KUBE_CLUSTERS_FILE ]] && source $KUBE_CLUSTERS_FILE }
 
