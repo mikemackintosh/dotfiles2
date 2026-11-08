@@ -26,7 +26,19 @@ helm()    { kx helm "$@" }
 cmctl()   { kx cmctl "$@" }
 # k is kubectl, with kubectl's completion.
 k()       { kubectl "$@" }
-(( $+functions[compdef] )) && compdef k=kubectl
+# No _kubectl ships on fpath, so compdef k=kubectl has nothing to copy until
+# kubectl's own completion is loaded. Cached: spawning kubectl costs every shell.
+if (( $+functions[compdef] && $+commands[kubectl] )); then
+  () {
+    local cache=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/kubectl-completion.zsh
+    if [[ ! -s $cache || $commands[kubectl] -nt $cache ]]; then
+      mkdir -p ${cache:h}
+      command kubectl completion zsh >| $cache 2>/dev/null || rm -f $cache
+    fi
+    (( $+_comps[kubectl] )) || { [[ -s $cache ]] && source $cache }
+    (( $+_comps[kubectl] )) && compdef k=kubectl
+  }
+fi
 # make gets the config ONLY when a goal is a k8s-* target. Every other make
 # (tests, builds, any repo) gets no kubeconfig at all: handing the admin config
 # to all of them would be the opposite of keeping it in memory.
