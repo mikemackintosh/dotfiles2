@@ -37,6 +37,7 @@ list at the end, with the exact command to finish it.
 ~/.dotfiles/install.sh brew              # Homebrew + Brewfile only
 ~/.dotfiles/install.sh macos             # system prefs only
 ~/.dotfiles/install.sh ssh               # re-check 1Password agent + signing
+~/.dotfiles/install.sh fda               # open Full Disk Access for this terminal
 ```
 
 ### After the run — the parts no script can do

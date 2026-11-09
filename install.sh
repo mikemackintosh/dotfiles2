@@ -11,6 +11,7 @@
 #   install.sh links            symlinks only
 #   install.sh brew             Homebrew + Brewfile only
 #   install.sh macos            system prefs only (bin/macos-defaults)
+#   install.sh fda              open the Full Disk Access pane for this terminal
 #   install.sh identity [ARGS]  pick signing/push keys from 1Password (bin/git-identity)
 set -euo pipefail
 
@@ -325,18 +326,64 @@ preflight() {
         fi
     fi
 
-    # Full Disk Access is the one thing no script can grant itself. Probing
-    # a TCC-protected directory is the standard non-destructive test.
-    if ls "$HOME/Library/Application Support/com.apple.TCC" >/dev/null 2>&1; then
-        ok "Terminal has Full Disk Access"
-    else
-        warn "This terminal lacks Full Disk Access — cursor colors will be skipped."
-        info "Opening System Settings → Privacy & Security → Full Disk Access."
-        info "Add ${TERM_PROGRAM:-your terminal}, quit it, reopen, and re-run this script."
-        open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles' \
-            >/dev/null 2>&1 || true
-        todo "Grant Full Disk Access to ${TERM_PROGRAM:-your terminal}, restart it, then: macos-defaults"
+    do_fda
+}
+
+has_fda() { ls "$HOME/Library/Application Support/com.apple.TCC" >/dev/null 2>&1; }
+
+# The .app that owns this shell — TCC grants go to it, not to zsh.
+# Launch Services sets __CFBundleIdentifier for the app that started us; it
+# is the only thing that tells CryTerm (our iTerm2 fork) from iTerm, since
+# both report TERM_PROGRAM=iTerm.app. Then $TERM_PROGRAM, then the process
+# walk; iTerm-family shells hang off iTermServer, outside the bundle, so the
+# walk never reaches them. Under tmux all miss and the caller prints a
+# generic name.
+terminal_app() {
+    local id=${__CFBundleIdentifier:-} path pid=$$ comm
+    if [[ -n $id ]] && path=$(osascript -e "POSIX path of (path to application id \"$id\")" 2>/dev/null); then
+        printf '%s\n' "${path%/}"; return 0
     fi
+    id=
+    case ${TERM_PROGRAM:-} in
+        iTerm.app)      id=com.googlecode.iterm2 ;;
+        Apple_Terminal) id=com.apple.Terminal ;;
+        ghostty)        id=com.mitchellh.ghostty ;;
+        WezTerm)        id=com.github.wez.wezterm ;;
+        vscode)         id=com.microsoft.VSCode ;;
+    esac
+    if [[ -n ${id:-} ]] && path=$(osascript -e "POSIX path of (path to application id \"$id\")" 2>/dev/null); then
+        printf '%s\n' "${path%/}"; return 0
+    fi
+    while (( pid > 1 )); do
+        comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 0
+        if [[ $comm == *.app/Contents/MacOS/* ]]; then
+            printf '%s.app\n' "${comm%%.app/Contents/MacOS/*}"; return 0
+        fi
+        pid=$(ps -o ppid= -p "$pid" 2>/dev/null) || return 0
+        pid=${pid//[[:space:]]/}
+    done
+}
+
+# Full Disk Access is the one thing no script can grant itself: TCC.db is
+# SIP-protected and tccutil can only reset. So open the pane, reveal the
+# app to drag in, and leave the rest as a TODO. Probing a TCC-protected
+# directory is the standard non-destructive test.
+do_fda() {
+    if has_fda; then ok "Terminal has Full Disk Access"; return 0; fi
+    local app name
+    app=$(terminal_app)
+    name=${app:+$(basename "$app" .app)}
+    name=${name:-${TERM_PROGRAM:-your terminal}}
+    warn "$name lacks Full Disk Access — cursor colors will be skipped."
+    info "Opening System Settings → Privacy & Security → Full Disk Access."
+    open 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles' \
+        >/dev/null 2>&1 || true
+    if [[ -n $app && -d $app ]]; then
+        info "Revealing $app in Finder: drag it into the list (or + and pick it)."
+        open -R "$app" >/dev/null 2>&1 || true
+    fi
+    info "Choose \"Quit & Reopen\" when asked — a running app never gains the grant."
+    todo "Grant Full Disk Access to $name, restart it, then: macos-defaults"
 }
 
 # ----------------------------------------------------------- homebrew
@@ -734,9 +781,9 @@ check() {
             && ok "Xcode license accepted" \
             || { warn "Xcode license not accepted — sudo xcodebuild -license accept"; failed=1; }
     fi
-    ls "$HOME/Library/Application Support/com.apple.TCC" >/dev/null 2>&1 \
+    has_fda \
         && ok "Full Disk Access granted to this terminal" \
-        || warn "no Full Disk Access for this terminal (cursor colors can't be set)"
+        || warn "no Full Disk Access for this terminal (cursor colors can't be set) — run: install.sh fda"
 
     local shell_now
     shell_now=$(dscl . -read "/Users/$USER" UserShell 2>/dev/null | awk '{print $2}') || true
@@ -990,11 +1037,12 @@ main() {
         macos)             exec "$DOTFILES/bin/macos-defaults" ;;
         # No preflight: this step touches nothing and needs no sudo.
         ssh)               do_ssh; summary; exit 0 ;;
+        fda)               do_fda; summary; exit 0 ;;
         launchagents)      do_launchagents; summary; exit 0 ;;
         identity)          exec "$DOTFILES/bin/git-identity" "${@:2}" ;;
         --no-macos)        run_macos=0 ;;
         "")                ;;
-        *) die "Usage: $0 [--check|--no-macos|links|brew|macos|ssh|launchagents|identity]" ;;
+        *) die "Usage: $0 [--check|--no-macos|links|brew|macos|ssh|fda|launchagents|identity]" ;;
     esac
 
     preflight
